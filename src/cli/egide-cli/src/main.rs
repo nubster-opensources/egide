@@ -169,87 +169,102 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("Checking Egide server at {}...", cli.addr);
             // TODO: Implement status check
-        }
+        },
         Commands::Operator { command } => {
             match command {
-                OperatorCommands::Init { key_shares, key_threshold } => {
-                    println!("Initializing Egide with {} shares, threshold {}...", key_shares, key_threshold);
+                OperatorCommands::Init {
+                    key_shares,
+                    key_threshold,
+                } => {
+                    println!(
+                        "Initializing Egide with {} shares, threshold {}...",
+                        key_shares, key_threshold
+                    );
                     // TODO: Implement init
-                }
-                OperatorCommands::Unseal { key } => {
+                },
+                OperatorCommands::Unseal { key: _key } => {
                     println!("Unsealing Egide...");
                     // TODO: Implement unseal
-                }
+                },
                 OperatorCommands::Seal => {
                     println!("Sealing Egide...");
                     // TODO: Implement seal
-                }
+                },
             }
-        }
+        },
         Commands::Secrets { command } => {
             match command {
                 SecretsCommands::Get { path } => {
                     println!("Getting secret: {}", path);
                     // TODO: Implement get
-                }
-                SecretsCommands::Put { path, data } => {
+                },
+                SecretsCommands::Put { path, data: _data } => {
                     println!("Storing secret: {}", path);
                     // TODO: Implement put
-                }
+                },
                 SecretsCommands::Delete { path } => {
                     println!("Deleting secret: {}", path);
                     // TODO: Implement delete
-                }
+                },
                 SecretsCommands::List { prefix } => {
                     println!("Listing secrets with prefix: {}", prefix);
                     // TODO: Implement list
-                }
+                },
             }
-        }
+        },
         Commands::Transit { command } => {
             match command {
-                TransitCommands::Encrypt { key, plaintext } => {
+                TransitCommands::Encrypt {
+                    key,
+                    plaintext: _plaintext,
+                } => {
                     println!("Encrypting with key: {}", key);
                     // TODO: Implement encrypt
-                }
-                TransitCommands::Decrypt { key, ciphertext } => {
+                },
+                TransitCommands::Decrypt {
+                    key,
+                    ciphertext: _ciphertext,
+                } => {
                     println!("Decrypting with key: {}", key);
                     // TODO: Implement decrypt
-                }
+                },
             }
-        }
+        },
         Commands::Kms { command } => {
             match command {
                 KmsCommands::Create { name, key_type } => {
                     println!("Creating key {} of type {}", name, key_type);
                     // TODO: Implement create
-                }
+                },
                 KmsCommands::List => {
                     println!("Listing keys...");
                     // TODO: Implement list
-                }
+                },
                 KmsCommands::Rotate { name } => {
                     println!("Rotating key: {}", name);
                     // TODO: Implement rotate
-                }
+                },
             }
-        }
+        },
         Commands::Pki { command } => {
             match command {
-                PkiCommands::InitCa { cn, org } => {
+                PkiCommands::InitCa { cn, org: _org } => {
                     println!("Initializing CA with CN: {}", cn);
                     // TODO: Implement init-ca
-                }
-                PkiCommands::Issue { cn, template } => {
+                },
+                PkiCommands::Issue {
+                    cn,
+                    template: _template,
+                } => {
                     println!("Issuing certificate for: {}", cn);
                     // TODO: Implement issue
-                }
+                },
                 PkiCommands::List => {
                     println!("Listing certificates...");
                     // TODO: Implement list
-                }
+                },
             }
-        }
+        },
     }
 
     Ok(())
