@@ -23,9 +23,16 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use sharks::{Share as SharkShare, Sharks};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Domain separation tag for master key verification.
+const SEAL_VERIFY_TAG: &[u8] = b"egide-seal-verify-v1";
 
 use egide_crypto::MasterKey;
 use egide_storage::StorageBackend;
@@ -40,6 +47,7 @@ mod keys {
     pub const SHAMIR_TOTAL: &str = "shamir_total";
     pub const INITIALIZED_AT: &str = "initialized_at";
     pub const DEV_MODE_KEY: &str = "dev_mode_master_key";
+    pub const MASTER_KEY_HMAC: &str = "master_key_hmac";
 }
 
 /// State of the vault seal.
@@ -136,6 +144,8 @@ pub struct SealManager {
     pending_indices: HashSet<u8>,
     threshold: u8,
     dev_mode: bool,
+    /// Expected HMAC for master key verification (loaded at startup).
+    expected_hmac: Option<Vec<u8>>,
 }
 
 impl SealManager {
@@ -153,6 +163,7 @@ impl SealManager {
             pending_indices: HashSet::new(),
             threshold: 0,
             dev_mode: false,
+            expected_hmac: None,
         };
 
         manager.load_status().await?;
@@ -170,6 +181,9 @@ impl SealManager {
             if let Some(threshold_bytes) = self.storage.get(keys::SHAMIR_THRESHOLD).await? {
                 self.threshold = threshold_bytes[0];
             }
+
+            // Load expected HMAC for master key verification
+            self.expected_hmac = self.storage.get(keys::MASTER_KEY_HMAC).await?;
 
             // Check for dev mode
             if let Some(key_bytes) = self.storage.get(keys::DEV_MODE_KEY).await? {
@@ -214,6 +228,9 @@ impl SealManager {
         // Generate master key
         let master_key = MasterKey::generate();
 
+        // Compute HMAC for master key verification
+        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes());
+
         // Split with Shamir
         let sharks = Sharks(config.threshold);
         let dealer = sharks.dealer(master_key.as_bytes());
@@ -252,7 +269,11 @@ impl SealManager {
         self.storage
             .put(keys::INITIALIZED_AT, &now.to_le_bytes())
             .await?;
+        self.storage
+            .put(keys::MASTER_KEY_HMAC, &master_key_hmac)
+            .await?;
 
+        self.expected_hmac = Some(master_key_hmac);
         self.status = SealStatus::Sealed;
         self.threshold = config.threshold;
 
@@ -308,6 +329,18 @@ impl SealManager {
             .recover(&self.pending_shares)
             .map_err(|_| SealError::ReconstructionFailed)?;
 
+        // Verify the reconstructed key matches expected HMAC
+        if let Some(expected_hmac) = &self.expected_hmac {
+            let computed_hmac = compute_master_key_hmac(&secret);
+            if computed_hmac != *expected_hmac {
+                warn!("Master key reconstruction failed - HMAC mismatch (invalid shares?)");
+                // Clear pending shares before returning error
+                self.pending_shares.clear();
+                self.pending_indices.clear();
+                return Err(SealError::ReconstructionFailed);
+            }
+        }
+
         let master_key =
             MasterKey::from_bytes(&secret).map_err(|e| SealError::Crypto(e.to_string()))?;
 
@@ -355,6 +388,9 @@ impl SealManager {
         // Generate and store master key in plaintext
         let master_key = MasterKey::generate();
 
+        // Compute HMAC for master key verification (consistency with initialize)
+        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes());
+
         // Generate root token
         let root_token = generate_token(32);
         let root_token_hash = hash_token(&root_token)?;
@@ -375,7 +411,11 @@ impl SealManager {
         self.storage
             .put(keys::INITIALIZED_AT, &now.to_le_bytes())
             .await?;
+        self.storage
+            .put(keys::MASTER_KEY_HMAC, &master_key_hmac)
+            .await?;
 
+        self.expected_hmac = Some(master_key_hmac);
         self.master_key = Some(master_key);
         self.status = SealStatus::Unsealed;
         self.dev_mode = true;
@@ -399,6 +439,13 @@ impl SealManager {
 
         Ok(verify_token(token, hash_str))
     }
+}
+
+/// Computes HMAC-SHA256 of the master key for verification.
+fn compute_master_key_hmac(master_key: &[u8]) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(master_key).expect("HMAC can take key of any size");
+    mac.update(SEAL_VERIFY_TAG);
+    mac.finalize().into_bytes().to_vec()
 }
 
 /// Generates a random token as hex string.
@@ -677,5 +724,32 @@ mod tests {
             // Root token should still work
             assert!(manager.verify_root_token(&root_token).await.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn test_unseal_with_invalid_shares_fails() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+
+        let config = ShamirConfig {
+            shares: 3,
+            threshold: 2,
+        };
+
+        // Initialize vault A
+        let mut manager_a = SealManager::new(tmp_a.path()).await.unwrap();
+        manager_a.initialize(config.clone()).await.unwrap();
+
+        // Initialize vault B (different master key)
+        let mut manager_b = SealManager::new(tmp_b.path()).await.unwrap();
+        let result_b = manager_b.initialize(config).await.unwrap();
+
+        // Try to unseal vault A with shares from vault B
+        // This should fail because the reconstructed key won't match the expected HMAC
+        manager_a.unseal(&result_b.shares[0]).await.unwrap();
+        let result = manager_a.unseal(&result_b.shares[1]).await;
+
+        assert!(matches!(result, Err(SealError::ReconstructionFailed)));
+        assert_eq!(manager_a.status(), SealStatus::Sealed);
     }
 }
