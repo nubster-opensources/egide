@@ -1,0 +1,15 @@
+[package]
+name = "egide-secrets"
+description = "Secrets Engine for Egide - Key/Value store with versioning"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egide-crypto = { path = "../egide-crypto" }
+egide-storage = { path = "../../storage/egide-storage" }
+
+thiserror.workspace = true

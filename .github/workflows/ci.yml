@@ -1,0 +1,163 @@
+name: CI
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Check
+    runs-on: [self-hosted, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_HOME="${RUNNER_TEMP}/cargo"
+          RUSTUP_HOME="${RUNNER_TEMP}/rustup"
+          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: rustfmt, clippy
+          override: true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check
+        run: cargo check --all-targets --all-features
+
+  test:
+    name: Test
+    runs-on: [self-hosted, rust]
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_HOME="${RUNNER_TEMP}/cargo"
+          RUSTUP_HOME="${RUNNER_TEMP}/rustup"
+          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  build:
+    name: Build Release
+    runs-on: [self-hosted, rust]
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_HOME="${RUNNER_TEMP}/cargo"
+          RUSTUP_HOME="${RUNNER_TEMP}/rustup"
+          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build release
+        run: cargo build --release --locked
+
+  security:
+    name: Security Audit
+    runs-on: [self-hosted, rust]
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_HOME="${RUNNER_TEMP}/cargo"
+          RUSTUP_HOME="${RUNNER_TEMP}/rustup"
+          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Security audit
+        run: cargo audit
