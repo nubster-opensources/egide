@@ -1,5 +1,8 @@
 # Rustfmt configuration for Egide
 # https://rust-lang.github.io/rustfmt/
+#
+# Note: Only stable options are used here.
+# For nightly features, add them conditionally.
 
 edition = "2021"
 
@@ -7,28 +10,14 @@ edition = "2021"
 max_width = 100
 use_small_heuristics = "Default"
 
-# Imports
-imports_granularity = "Module"
-group_imports = "StdExternalCrate"
+# Imports (stable options only)
 reorder_imports = true
 reorder_modules = true
 
-# Comments
-wrap_comments = false
-normalize_comments = false
-normalize_doc_attributes = true
-
 # Formatting
-newline_style = "Unix"
+newline_style = "Auto"
 use_field_init_shorthand = true
 use_try_shorthand = true
 
-# Functions
-fn_single_line = false
-fn_params_layout = "Tall"
-
 # Match
 match_block_trailing_comma = true
-
-# Structs
-struct_lit_single_line = true
