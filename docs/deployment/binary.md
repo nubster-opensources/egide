@@ -218,7 +218,7 @@ sudo chown egide:egide /etc/egide/*.key
 sudo chmod 600 /etc/egide/*.key
 ```
 
-### Update Configuration
+### Update TLS Configuration
 
 ```toml
 [server]
@@ -292,7 +292,7 @@ sudo firewall-cmd --reload
 
 ### /etc/logrotate.d/egide
 
-```
+```text
 /var/log/egide/*.log {
     daily
     missingok
