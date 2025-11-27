@@ -1,0 +1,40 @@
+# Build artifacts
+target/
+debug/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Deploy configs (not needed in image)
+deploy/
+
+# Development files
+.editorconfig
+.env*
+Makefile
+rust-toolchain.toml
+
+# Tests
+tests/
+examples/
+**/tests/
+**/*_test.rs
+
+# Misc
+*.log
+coverage/

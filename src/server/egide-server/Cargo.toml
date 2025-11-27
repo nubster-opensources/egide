@@ -1,0 +1,25 @@
+[package]
+name = "egide-server"
+description = "Egide server - main binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "egide-server"
+path = "src/main.rs"
+
+[dependencies]
+egide-api = { path = "../egide-api" }
+egide-auth = { path = "../egide-auth" }
+egide-storage = { path = "../../storage/egide-storage" }
+egide-storage-sqlite = { path = "../../storage/egide-storage-sqlite" }
+
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true

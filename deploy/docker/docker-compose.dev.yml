@@ -1,0 +1,26 @@
+services:
+  egide:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: egide-dev
+    ports:
+      - "8200:8200"
+    environment:
+      - EGIDE_DEV_MODE=true
+      - EGIDE_LOG_LEVEL=debug
+      - RUST_LOG=debug
+    volumes:
+      - egide-data:/var/lib/egide
+      - egide-logs:/var/log/egide
+    healthcheck:
+      test: ["CMD", "egide", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  egide-data:
+  egide-logs:
