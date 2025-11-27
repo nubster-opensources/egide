@@ -527,9 +527,16 @@ dependencies = [
 name = "egide-secrets"
 version = "0.1.0-alpha"
 dependencies = [
+ "async-trait",
  "egide-crypto",
  "egide-storage",
+ "egide-storage-sqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
