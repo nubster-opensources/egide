@@ -15,6 +15,7 @@ docker run -d \
 ```
 
 In dev mode:
+
 - Automatically initialized and unsealed
 - Root token printed to logs
 - In-memory storage (data lost on restart)

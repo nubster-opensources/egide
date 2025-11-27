@@ -156,8 +156,13 @@ jobs:
           profile: minimal
           override: true
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      - name: Install security tools
+        run: |
+          cargo install cargo-audit --locked
+          cargo install cargo-deny --locked
 
       - name: Security audit
         run: cargo audit
+
+      - name: Dependency check (licenses, bans, sources)
+        run: cargo deny check

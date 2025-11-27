@@ -107,7 +107,7 @@ sudo mv egide-server egide /usr/local/bin/
 
 ## Quick Comparison
 
-```
+```text
                     ┌─────────────────────────────────────┐
                     │         DEPLOYMENT COMPLEXITY        │
                     │                                     │

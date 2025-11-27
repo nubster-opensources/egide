@@ -76,9 +76,17 @@ release-cli:
 audit:
 	$(CARGO) audit
 
-## Install audit tool
-audit-install:
+## Check dependencies (licenses, bans, sources, advisories)
+deny:
+	$(CARGO) deny check
+
+## Run all security checks
+security: audit deny
+
+## Install security tools
+security-install:
 	$(CARGO) install cargo-audit --locked
+	$(CARGO) install cargo-deny --locked
 
 # ============================================================================
 # Documentation
@@ -151,6 +159,7 @@ lock:
 ## Install development tools
 tools:
 	$(CARGO) install cargo-audit --locked
+	$(CARGO) install cargo-deny --locked
 	$(CARGO) install cargo-watch --locked
 
 ## Watch and rebuild on changes
@@ -187,8 +196,10 @@ help:
 	@echo "  release-cli    Build CLI binary only"
 	@echo ""
 	@echo "Security:"
-	@echo "  audit          Run security audit"
-	@echo "  audit-install  Install audit tool"
+	@echo "  audit          Run security audit (vulnerabilities)"
+	@echo "  deny           Check dependencies (licenses, bans)"
+	@echo "  security       Run all security checks"
+	@echo "  security-install Install security tools"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  doc            Generate documentation"

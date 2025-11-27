@@ -35,7 +35,7 @@ The Transit Engine provides Encryption as a Service (EaaS), allowing application
 
 Transit Engine separates **data** from **keys**:
 
-```
+```text
 Traditional Approach:
 ┌─────────────┐     ┌─────────────┐
 │ Application │────>│   Key       │  Application manages keys
@@ -55,7 +55,7 @@ Transit Approach:
 
 Encrypt plaintext without exposing the key.
 
-```
+```http
 Request:
 POST /v1/transit/encrypt/my-key
 {
@@ -72,7 +72,7 @@ Response:
 
 Decrypt ciphertext using the key version encoded in the ciphertext.
 
-```
+```http
 Request:
 POST /v1/transit/decrypt/my-key
 {
@@ -89,7 +89,7 @@ Response:
 
 Re-encrypt ciphertext with the latest key version without exposing plaintext.
 
-```
+```http
 Request:
 POST /v1/transit/rewrap/my-key
 {
@@ -104,7 +104,7 @@ Response:
 
 ## Ciphertext Format
 
-```
+```text
 egide:v1:key-name:version:base64-data
   │    │     │       │         │
   │    │     │       │         └─ Encrypted data
@@ -132,7 +132,7 @@ egide:v1:key-name:version:base64-data
 - Different ciphertext for same plaintext
 - Recommended for most use cases
 
-```
+```text
 Encrypt("hello") → "egide:v1:key:1:aBc..."
 Encrypt("hello") → "egide:v1:key:1:xYz..."  // Different!
 ```
@@ -150,7 +150,7 @@ type: "aes256-gcm"
 convergent: true
 ```
 
-```
+```text
 Encrypt("hello", context="user-1") → "egide:v1:key:1:aBc..."
 Encrypt("hello", context="user-1") → "egide:v1:key:1:aBc..."  // Same!
 Encrypt("hello", context="user-2") → "egide:v1:key:1:xYz..."  // Different context
@@ -162,7 +162,7 @@ Generate a data encryption key (DEK) for client-side encryption.
 
 ### Use Case: Envelope Encryption
 
-```
+```text
 ┌─────────────┐                    ┌─────────────┐
 │ Application │                    │   EGIDE     │
 └──────┬──────┘                    └──────┬──────┘
@@ -186,7 +186,7 @@ Generate a data encryption key (DEK) for client-side encryption.
 
 ### Datakey API
 
-```
+```http
 Request:
 POST /v1/transit/datakey/my-key
 {
@@ -206,7 +206,7 @@ Process multiple items in a single request.
 
 ### Batch Encrypt
 
-```
+```http
 Request:
 POST /v1/transit/encrypt/my-key
 {
@@ -238,7 +238,7 @@ Response:
 
 Transit automatically handles key rotation:
 
-```
+```text
 1. Key rotated (v1 → v2)
 
 2. New encryptions use v2
