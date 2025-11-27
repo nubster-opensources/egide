@@ -13,9 +13,17 @@ pub enum StorageError {
     #[error("entry already exists: {0}")]
     AlreadyExists(String),
 
-    /// Connection error.
-    #[error("connection error: {0}")]
-    Connection(String),
+    /// Connection failed.
+    #[error("connection failed: {0}")]
+    ConnectionFailed(String),
+
+    /// Query failed.
+    #[error("query failed: {0}")]
+    QueryFailed(String),
+
+    /// Invalid input.
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 
     /// Serialization error.
     #[error("serialization error: {0}")]
