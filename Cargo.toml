@@ -45,6 +45,7 @@ async-trait = "0.1"
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+hmac = "0.12"
 rand = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
 sharks = "0.5"
