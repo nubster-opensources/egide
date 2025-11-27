@@ -1,0 +1,15 @@
+[package]
+name = "egide-transit"
+description = "Transit Engine for Egide - Encryption as a Service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egide-crypto = { path = "../egide-crypto" }
+egide-kms = { path = "../egide-kms" }
+
+thiserror.workspace = true

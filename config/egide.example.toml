@@ -1,0 +1,88 @@
+# =============================================================================
+# Egide Configuration
+# =============================================================================
+# Copy this file to egide.toml and adjust values for your environment.
+
+# -----------------------------------------------------------------------------
+# Server
+# -----------------------------------------------------------------------------
+[server]
+# Address to bind the server
+bind = "0.0.0.0:8200"
+
+# Enable TLS (required in production)
+tls_enabled = false
+tls_cert_file = "/etc/egide/tls/server.crt"
+tls_key_file = "/etc/egide/tls/server.key"
+
+# Enable development mode (auto-unseal, in-memory storage)
+# WARNING: Never enable in production!
+dev_mode = false
+
+# -----------------------------------------------------------------------------
+# Storage
+# -----------------------------------------------------------------------------
+[storage]
+# Storage backend: "sqlite" or "postgres"
+backend = "sqlite"
+
+# SQLite configuration
+[storage.sqlite]
+path = "/var/lib/egide/egide.db"
+
+# PostgreSQL configuration (uncomment to use)
+# [storage.postgres]
+# host = "localhost"
+# port = 5432
+# database = "egide"
+# username = "egide"
+# password = "changeme"
+# ssl_mode = "prefer"
+
+# -----------------------------------------------------------------------------
+# Seal
+# -----------------------------------------------------------------------------
+[seal]
+# Seal type: "shamir" or "auto-unseal"
+type = "shamir"
+
+# Shamir configuration
+[seal.shamir]
+# Number of key shares to generate
+shares = 5
+# Number of shares required to unseal
+threshold = 3
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Log format: "json" or "pretty"
+format = "json"
+
+# Log output: "stdout", "stderr", or file path
+output = "stdout"
+
+# -----------------------------------------------------------------------------
+# Telemetry
+# -----------------------------------------------------------------------------
+[telemetry]
+# Enable Prometheus metrics endpoint
+metrics_enabled = true
+metrics_path = "/metrics"
+
+# -----------------------------------------------------------------------------
+# Limits
+# -----------------------------------------------------------------------------
+[limits]
+# Maximum request body size (bytes)
+max_request_size = 1048576  # 1 MB
+
+# Request timeout (seconds)
+request_timeout = 30
+
+# Maximum concurrent connections
+max_connections = 1000
