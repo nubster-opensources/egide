@@ -76,9 +76,9 @@ release-cli:
 audit:
 	$(CARGO) audit
 
-## Check dependencies (licenses, bans, sources, advisories)
+## Check dependencies (advisories, bans, sources)
 deny:
-	$(CARGO) deny check
+	$(CARGO) deny check advisories bans sources
 
 ## Run all security checks
 security: audit deny
@@ -86,7 +86,7 @@ security: audit deny
 ## Install security tools
 security-install:
 	$(CARGO) install cargo-audit --locked
-	$(CARGO) install cargo-deny --locked
+	$(CARGO) install cargo-deny@0.18.3 --locked
 
 # ============================================================================
 # Documentation
