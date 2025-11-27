@@ -1,0 +1,32 @@
+services:
+  egide:
+    image: nubster/egide:${EGIDE_VERSION:-latest}
+    container_name: egide
+    ports:
+      - "8200:8200"
+    environment:
+      - EGIDE_CONFIG=/etc/egide/config.toml
+      - EGIDE_LOG_LEVEL=info
+    volumes:
+      - egide-data:/var/lib/egide
+      - egide-logs:/var/log/egide
+      - ./config:/etc/egide:ro
+    healthcheck:
+      test: ["CMD", "egide", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+
+volumes:
+  egide-data:
+  egide-logs:

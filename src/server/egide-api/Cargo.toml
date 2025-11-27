@@ -1,0 +1,18 @@
+[package]
+name = "egide-api"
+description = "Egide REST and gRPC API layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egide-secrets = { path = "../../core/egide-secrets" }
+egide-kms = { path = "../../core/egide-kms" }
+egide-pki = { path = "../../core/egide-pki" }
+egide-transit = { path = "../../core/egide-transit" }
+egide-auth = { path = "../egide-auth" }
+
+thiserror.workspace = true
