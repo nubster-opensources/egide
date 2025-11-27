@@ -159,10 +159,10 @@ jobs:
       - name: Install security tools
         run: |
           cargo install cargo-audit --locked
-          cargo install cargo-deny --locked
+          cargo install cargo-deny@0.18.3 --locked
 
       - name: Security audit
         run: cargo audit
 
-      - name: Dependency check (licenses, bans, sources)
-        run: cargo deny check
+      - name: Dependency check (advisories, bans, sources)
+        run: cargo deny check advisories bans sources

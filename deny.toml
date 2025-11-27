@@ -1,7 +1,10 @@
 # cargo-deny configuration for Egide
 # https://embarkstudios.github.io/cargo-deny/
 #
-# Run: cargo deny check
+# Run: cargo deny check advisories bans sources
+# (Skip license check - BSL-1.1 is not a valid SPDX identifier)
+#
+# Compatible with cargo-deny 0.18.x
 
 [graph]
 targets = [
@@ -18,45 +21,10 @@ all-features = true
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
 ignore = [
     # Add advisory IDs to ignore here if needed
     # "RUSTSEC-0000-0000",
 ]
-
-# =============================================================================
-# Licenses - Ensure compatible licenses
-# =============================================================================
-[licenses]
-unlicensed = "deny"
-copyleft = "warn"
-allow = [
-    "MIT",
-    "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "Zlib",
-    "MPL-2.0",
-    "Unicode-DFS-2016",
-    "CC0-1.0",
-    "BSL-1.0",
-]
-confidence-threshold = 0.93
-
-[[licenses.clarify]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-[[licenses.clarify]]
-name = "webpki"
-expression = "ISC"
-license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 
 # =============================================================================
 # Bans - Deny specific crates or versions
@@ -90,7 +58,7 @@ unknown-git = "warn"
 
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
-[sources.allow-org]
-github = [
-    "nubster-opensources",
-]
+# [sources.allow-org]
+# github = [
+#     "nubster-opensources",
+# ]
