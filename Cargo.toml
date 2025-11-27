@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     # Core engines
     "src/core/egide-crypto",
+    "src/core/egide-seal",
     "src/core/egide-secrets",
     "src/core/egide-kms",
     "src/core/egide-pki",
@@ -46,6 +47,8 @@ hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
+sharks = "0.5"
+argon2 = "0.5"
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
