@@ -49,8 +49,8 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
-## Run all quality checks (format, lint, test)
-ci: fmt-check lint test
+## Run all quality checks (format, lint, test, audit)
+ci: fmt-check lint test audit
 
 # ============================================================================
 # Release

@@ -23,9 +23,9 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use blahaj::{Share as SharkShare, Sharks};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use sharks::{Share as SharkShare, Sharks};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
