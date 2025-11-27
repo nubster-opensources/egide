@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use egide_crypto::{aead, kdf, MasterKey};
@@ -96,13 +95,6 @@ pub struct PutOptions {
     pub metadata: Option<serde_json::Value>,
     /// Check-and-set: only succeed if current version matches.
     pub cas: Option<u32>,
-}
-
-/// Internal structure for storing encrypted secret data.
-#[derive(Serialize, Deserialize)]
-struct EncryptedSecret {
-    data: Vec<u8>,
-    nonce: Vec<u8>,
 }
 
 /// The Secrets Engine provides secure storage for key-value secrets.
