@@ -1,6 +1,13 @@
 //! Egide Server - Main entry point.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Instant;
+
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use clap::Parser;
+use serde::Serialize;
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
@@ -21,9 +28,61 @@ struct Cli {
     bind: String,
 }
 
+/// Server state shared across handlers.
+struct AppState {
+    start_time: Instant,
+    version: &'static str,
+    sealed: bool,
+    initialized: bool,
+}
+
+/// Health check response.
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    version: &'static str,
+    sealed: bool,
+    initialized: bool,
+    uptime_secs: u64,
+}
+
+/// Status response for detailed server info.
+#[derive(Serialize)]
+struct StatusResponse {
+    version: &'static str,
+    sealed: bool,
+    initialized: bool,
+    cluster_name: Option<String>,
+    cluster_id: Option<String>,
+}
+
+async fn health_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
+    let response = HealthResponse {
+        status: "ok",
+        version: state.version,
+        sealed: state.sealed,
+        initialized: state.initialized,
+        uptime_secs: state.start_time.elapsed().as_secs(),
+    };
+    (StatusCode::OK, Json(response))
+}
+
+async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
+    Json(StatusResponse {
+        version: state.version,
+        sealed: state.sealed,
+        initialized: state.initialized,
+        cluster_name: None,
+        cluster_id: None,
+    })
+}
+
+async fn root_handler() -> &'static str {
+    "Egide - Secrets, KMS, and PKI Server"
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -38,14 +97,37 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("Development mode enabled - DO NOT USE IN PRODUCTION");
     }
 
-    // TODO: Initialize server
-    // TODO: Start HTTP/gRPC listeners
+    let state = Arc::new(AppState {
+        start_time: Instant::now(),
+        version: env!("CARGO_PKG_VERSION"),
+        sealed: !cli.dev,
+        initialized: cli.dev,
+    });
 
-    tracing::info!("Egide server started successfully");
+    let app = Router::new()
+        .route("/", get(root_handler))
+        .route("/v1/sys/health", get(health_handler))
+        .route("/v1/sys/status", get(status_handler))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
 
-    // Keep the server running
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down...");
+    let addr: SocketAddr = cli.bind.parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    tracing::info!("Egide server listening on {}", addr);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("Egide server stopped");
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install CTRL+C signal handler");
+    tracing::info!("Shutdown signal received");
 }

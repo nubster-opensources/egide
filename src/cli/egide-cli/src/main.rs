@@ -1,6 +1,10 @@
 //! Egide CLI - Command line interface.
 
+use std::time::Duration;
+
+use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(name = "egide")]
@@ -46,7 +50,7 @@ enum Commands {
         #[command(subcommand)]
         command: PkiCommands,
     },
-    /// Server status
+    /// Check server status (used for health checks)
     Status,
 }
 
@@ -159,16 +163,66 @@ enum PkiCommands {
     List,
 }
 
+/// Health response from server.
+#[derive(Debug, Deserialize)]
+struct HealthResponse {
+    status: String,
+    version: String,
+    sealed: bool,
+    initialized: bool,
+    uptime_secs: u64,
+}
+
+/// Check server health by calling the /v1/sys/health endpoint.
+async fn check_status(addr: &str) -> anyhow::Result<HealthResponse> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    let url = format!("{}/v1/sys/health", addr.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to connect to Egide server at {}", addr))?;
+
+    if !response.status().is_success() {
+        bail!(
+            "Server returned error status: {} {}",
+            response.status().as_u16(),
+            response.status().canonical_reason().unwrap_or("Unknown")
+        );
+    }
+
+    let health: HealthResponse = response
+        .json()
+        .await
+        .context("Failed to parse health response")?;
+
+    Ok(health)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // TODO: Implement command handlers
-
     match cli.command {
-        Commands::Status => {
-            println!("Checking Egide server at {}...", cli.addr);
-            // TODO: Implement status check
+        Commands::Status => match check_status(&cli.addr).await {
+            Ok(health) => {
+                println!("Egide server at {} is healthy", cli.addr);
+                println!("  Status:      {}", health.status);
+                println!("  Version:     {}", health.version);
+                println!("  Initialized: {}", health.initialized);
+                println!("  Sealed:      {}", health.sealed);
+                println!("  Uptime:      {}s", health.uptime_secs);
+                Ok(())
+            },
+            Err(e) => {
+                eprintln!("Egide server at {} is unhealthy: {}", cli.addr, e);
+                std::process::exit(1);
+            },
         },
         Commands::Operator { command } => {
             match command {
@@ -181,14 +235,17 @@ async fn main() -> anyhow::Result<()> {
                         key_shares, key_threshold
                     );
                     // TODO: Implement init
+                    Ok(())
                 },
                 OperatorCommands::Unseal { key: _key } => {
                     println!("Unsealing Egide...");
                     // TODO: Implement unseal
+                    Ok(())
                 },
                 OperatorCommands::Seal => {
                     println!("Sealing Egide...");
                     // TODO: Implement seal
+                    Ok(())
                 },
             }
         },
@@ -197,18 +254,22 @@ async fn main() -> anyhow::Result<()> {
                 SecretsCommands::Get { path } => {
                     println!("Getting secret: {}", path);
                     // TODO: Implement get
+                    Ok(())
                 },
                 SecretsCommands::Put { path, data: _data } => {
                     println!("Storing secret: {}", path);
                     // TODO: Implement put
+                    Ok(())
                 },
                 SecretsCommands::Delete { path } => {
                     println!("Deleting secret: {}", path);
                     // TODO: Implement delete
+                    Ok(())
                 },
                 SecretsCommands::List { prefix } => {
                     println!("Listing secrets with prefix: {}", prefix);
                     // TODO: Implement list
+                    Ok(())
                 },
             }
         },
@@ -220,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     println!("Encrypting with key: {}", key);
                     // TODO: Implement encrypt
+                    Ok(())
                 },
                 TransitCommands::Decrypt {
                     key,
@@ -227,6 +289,7 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     println!("Decrypting with key: {}", key);
                     // TODO: Implement decrypt
+                    Ok(())
                 },
             }
         },
@@ -235,14 +298,17 @@ async fn main() -> anyhow::Result<()> {
                 KmsCommands::Create { name, key_type } => {
                     println!("Creating key {} of type {}", name, key_type);
                     // TODO: Implement create
+                    Ok(())
                 },
                 KmsCommands::List => {
                     println!("Listing keys...");
                     // TODO: Implement list
+                    Ok(())
                 },
                 KmsCommands::Rotate { name } => {
                     println!("Rotating key: {}", name);
                     // TODO: Implement rotate
+                    Ok(())
                 },
             }
         },
@@ -251,6 +317,7 @@ async fn main() -> anyhow::Result<()> {
                 PkiCommands::InitCa { cn, org: _org } => {
                     println!("Initializing CA with CN: {}", cn);
                     // TODO: Implement init-ca
+                    Ok(())
                 },
                 PkiCommands::Issue {
                     cn,
@@ -258,14 +325,14 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     println!("Issuing certificate for: {}", cn);
                     // TODO: Implement issue
+                    Ok(())
                 },
                 PkiCommands::List => {
                     println!("Listing certificates...");
                     // TODO: Implement list
+                    Ok(())
                 },
             }
         },
     }
-
-    Ok(())
 }
