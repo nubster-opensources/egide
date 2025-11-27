@@ -349,6 +349,19 @@ impl SecretsEngine {
     pub async fn get_version(&self, path: &str, version: u32) -> Result<Secret, SecretsError> {
         Self::validate_path(path)?;
 
+        // Check if secret is soft-deleted
+        let deleted = self
+            .storage
+            .query_one::<(Option<i64>,)>("SELECT deleted_at FROM secrets WHERE path = ?", &[path])
+            .await
+            .map_err(|e| SecretsError::Storage(e.to_string()))?;
+
+        match deleted {
+            Some((Some(_),)) => return Err(SecretsError::Deleted(path.to_string())),
+            Some((None,)) => {}, // Not deleted, continue
+            None => return Err(SecretsError::NotFound(path.to_string())),
+        }
+
         let row = self
             .storage
             .query_one::<(String, String, String, String, String)>(
@@ -791,6 +804,28 @@ mod tests {
         // Should be accessible again
         let secret = engine.get("app/temp").await.unwrap();
         assert_eq!(secret.data.get("username").unwrap(), "admin");
+    }
+
+    #[tokio::test]
+    async fn test_get_version_respects_soft_delete() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/deleted", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Soft delete
+        engine.delete("app/deleted").await.unwrap();
+
+        // get_version should also return Deleted error (regression test)
+        let result = engine.get_version("app/deleted", 1).await;
+        assert!(matches!(result, Err(SecretsError::Deleted(_))));
+
+        // After undelete, get_version should work
+        engine.undelete("app/deleted").await.unwrap();
+        let secret = engine.get_version("app/deleted", 1).await.unwrap();
+        assert_eq!(secret.version, 1);
     }
 
     #[tokio::test]
