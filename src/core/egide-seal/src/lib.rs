@@ -135,13 +135,13 @@ pub struct UnsealProgress {
 
 /// The Seal Manager handles vault locking/unlocking.
 pub struct SealManager {
-    storage: SqliteBackend,
+    pub(crate) storage: SqliteBackend,
     #[allow(dead_code)]
     data_path: PathBuf,
     status: SealStatus,
     master_key: Option<MasterKey>,
-    pending_shares: Vec<SharkShare>,
-    pending_indices: HashSet<u8>,
+    pub(crate) pending_shares: Vec<SharkShare>,
+    pub(crate) pending_indices: HashSet<u8>,
     threshold: u8,
     dev_mode: bool,
     /// Expected HMAC for master key verification (loaded at startup).
@@ -330,15 +330,20 @@ impl SealManager {
             .map_err(|_| SealError::ReconstructionFailed)?;
 
         // Verify the reconstructed key matches expected HMAC
-        if let Some(expected_hmac) = &self.expected_hmac {
-            let computed_hmac = compute_master_key_hmac(&secret);
-            if computed_hmac != *expected_hmac {
-                warn!("Master key reconstruction failed - HMAC mismatch (invalid shares?)");
-                // Clear pending shares before returning error
-                self.pending_shares.clear();
-                self.pending_indices.clear();
-                return Err(SealError::ReconstructionFailed);
-            }
+        let expected_hmac = self.expected_hmac.as_ref().ok_or_else(|| {
+            warn!("Master key reconstruction failed - missing expected HMAC (data corruption?)");
+            self.pending_shares.clear();
+            self.pending_indices.clear();
+            SealError::ReconstructionFailed
+        })?;
+
+        let computed_hmac = compute_master_key_hmac(&secret);
+        if computed_hmac != *expected_hmac {
+            warn!("Master key reconstruction failed - HMAC mismatch (invalid shares?)");
+            // Clear pending shares before returning error
+            self.pending_shares.clear();
+            self.pending_indices.clear();
+            return Err(SealError::ReconstructionFailed);
         }
 
         let master_key =
@@ -751,5 +756,33 @@ mod tests {
 
         assert!(matches!(result, Err(SealError::ReconstructionFailed)));
         assert_eq!(manager_a.status(), SealStatus::Sealed);
+    }
+
+    #[tokio::test]
+    async fn test_unseal_missing_hmac_fails() {
+        let (tmp, mut manager) = setup().await;
+
+        let config = ShamirConfig {
+            shares: 3,
+            threshold: 2,
+        };
+
+        let init_result = manager.initialize(config).await.unwrap();
+
+        // Simulate corrupted storage missing the expected HMAC
+        manager.storage.delete(keys::MASTER_KEY_HMAC).await.unwrap();
+
+        // Simulate restart where verification material is missing
+        drop(manager);
+        let mut manager = SealManager::new(tmp.path()).await.unwrap();
+
+        // Even with enough shares, reconstruction should be rejected
+        manager.unseal(&init_result.shares[0]).await.unwrap();
+        let result = manager.unseal(&init_result.shares[1]).await;
+
+        assert!(matches!(result, Err(SealError::ReconstructionFailed)));
+        assert_eq!(manager.status(), SealStatus::Sealed);
+        assert!(manager.pending_shares.is_empty());
+        assert!(manager.pending_indices.is_empty());
     }
 }
