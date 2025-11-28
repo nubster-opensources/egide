@@ -1116,4 +1116,559 @@ mod tests {
         assert_eq!(versions[1].version, 2);
         assert_eq!(versions[2].version, 1);
     }
+
+    // ========================================================================
+    // Edge Case Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_encrypt_empty_data() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("empty-key", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("empty-key", b"").await.unwrap();
+        let decrypted = engine.decrypt("empty-key", &ciphertext).await.unwrap();
+        assert_eq!(decrypted, b"");
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_binary_data() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("bin-key", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // All possible byte values
+        let binary_data: Vec<u8> = (0..=255).collect();
+        let ciphertext = engine.encrypt("bin-key", &binary_data).await.unwrap();
+        let decrypted = engine.decrypt("bin-key", &ciphertext).await.unwrap();
+        assert_eq!(decrypted, binary_data);
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_unicode_data() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("unicode-key", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let unicode_data = "Hello 世界! 🔐 Ægide résiste aux attaques! 日本語テスト";
+        let ciphertext = engine
+            .encrypt("unicode-key", unicode_data.as_bytes())
+            .await
+            .unwrap();
+        let decrypted = engine.decrypt("unicode-key", &ciphertext).await.unwrap();
+        assert_eq!(String::from_utf8(decrypted).unwrap(), unicode_data);
+    }
+
+    #[tokio::test]
+    async fn test_key_name_max_length() {
+        let (_tmp, engine) = setup().await;
+
+        // 128 chars should work
+        let max_name: String = "a".repeat(128);
+        engine
+            .create_key(&max_name, KeyConfig::new())
+            .await
+            .unwrap();
+
+        // 129 chars should fail
+        let too_long: String = "a".repeat(129);
+        let result = engine.create_key(&too_long, KeyConfig::new()).await;
+        assert!(matches!(result, Err(TransitError::InvalidKeyName(_))));
+    }
+
+    #[tokio::test]
+    async fn test_key_name_allowed_chars() {
+        let (_tmp, engine) = setup().await;
+
+        // These should all work
+        engine.create_key("my-key", KeyConfig::new()).await.unwrap();
+        engine.create_key("my_key", KeyConfig::new()).await.unwrap();
+        engine
+            .create_key("MyKey123", KeyConfig::new())
+            .await
+            .unwrap();
+        engine
+            .create_key("KEY-2024_test", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // These should fail
+        let result = engine.create_key("key/path", KeyConfig::new()).await;
+        assert!(matches!(result, Err(TransitError::InvalidKeyName(_))));
+
+        let result = engine.create_key("key.name", KeyConfig::new()).await;
+        assert!(matches!(result, Err(TransitError::InvalidKeyName(_))));
+
+        let result = engine.create_key("key name", KeyConfig::new()).await;
+        assert!(matches!(result, Err(TransitError::InvalidKeyName(_))));
+    }
+
+    // ========================================================================
+    // Version Boundary Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_encrypt_with_specific_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("ver-enc", KeyConfig::new())
+            .await
+            .unwrap();
+        engine.rotate_key("ver-enc").await.unwrap();
+        engine.rotate_key("ver-enc").await.unwrap();
+
+        // Encrypt with v2 (not latest)
+        let ciphertext = engine
+            .encrypt_with_version("ver-enc", b"data", 2)
+            .await
+            .unwrap();
+        assert!(ciphertext.starts_with("egide:v2:"));
+
+        // Should decrypt correctly
+        let decrypted = engine.decrypt("ver-enc", &ciphertext).await.unwrap();
+        assert_eq!(decrypted, b"data");
+    }
+
+    #[tokio::test]
+    async fn test_min_encryption_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("min-enc", KeyConfig::new())
+            .await
+            .unwrap();
+        engine.rotate_key("min-enc").await.unwrap();
+
+        // Set min_encryption_version to 2
+        engine
+            .update_key_config("min-enc", Some(2), None, None)
+            .await
+            .unwrap();
+
+        // Encrypting with v1 should fail
+        let result = engine.encrypt_with_version("min-enc", b"data", 1).await;
+        assert!(matches!(
+            result,
+            Err(TransitError::VersionBelowMinEncryption { .. })
+        ));
+
+        // Encrypting with v2 should work
+        let ciphertext = engine
+            .encrypt_with_version("min-enc", b"data", 2)
+            .await
+            .unwrap();
+        assert!(ciphertext.starts_with("egide:v2:"));
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_with_nonexistent_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("noversion", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Try to encrypt with version 99
+        let result = engine.encrypt_with_version("noversion", b"data", 99).await;
+        assert!(matches!(result, Err(TransitError::VersionNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_rewrap_already_latest() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("rewrap-latest", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("rewrap-latest", b"data").await.unwrap();
+
+        // Rewrap should return same ciphertext (already at latest)
+        let rewrapped = engine.rewrap("rewrap-latest", &ciphertext).await.unwrap();
+        assert_eq!(rewrapped, ciphertext);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_rotations() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("multi-rot", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Encrypt with each version
+        let ct1 = engine.encrypt("multi-rot", b"v1-data").await.unwrap();
+
+        engine.rotate_key("multi-rot").await.unwrap();
+        let ct2 = engine.encrypt("multi-rot", b"v2-data").await.unwrap();
+
+        engine.rotate_key("multi-rot").await.unwrap();
+        let ct3 = engine.encrypt("multi-rot", b"v3-data").await.unwrap();
+
+        engine.rotate_key("multi-rot").await.unwrap();
+        let ct4 = engine.encrypt("multi-rot", b"v4-data").await.unwrap();
+
+        engine.rotate_key("multi-rot").await.unwrap();
+        let ct5 = engine.encrypt("multi-rot", b"v5-data").await.unwrap();
+
+        // All should decrypt correctly
+        assert_eq!(engine.decrypt("multi-rot", &ct1).await.unwrap(), b"v1-data");
+        assert_eq!(engine.decrypt("multi-rot", &ct2).await.unwrap(), b"v2-data");
+        assert_eq!(engine.decrypt("multi-rot", &ct3).await.unwrap(), b"v3-data");
+        assert_eq!(engine.decrypt("multi-rot", &ct4).await.unwrap(), b"v4-data");
+        assert_eq!(engine.decrypt("multi-rot", &ct5).await.unwrap(), b"v5-data");
+
+        // Verify version numbers
+        assert!(ct1.starts_with("egide:v1:"));
+        assert!(ct5.starts_with("egide:v5:"));
+    }
+
+    // ========================================================================
+    // Error Condition Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_tampered_ciphertext_base64() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("tamper-key", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("tamper-key", b"secret").await.unwrap();
+
+        // Tamper with the base64 payload
+        let parts: Vec<&str> = ciphertext.splitn(3, ':').collect();
+        let tampered = format!("{}:{}:{}TAMPERED", parts[0], parts[1], parts[2]);
+
+        let result = engine.decrypt("tamper-key", &tampered).await;
+        // Could be InvalidCiphertext (bad base64) or DecryptionFailed (bad auth tag)
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tampered_ciphertext_bytes() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("tamper-bytes", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("tamper-bytes", b"secret").await.unwrap();
+
+        // Decode, flip a bit, re-encode
+        let parts: Vec<&str> = ciphertext.splitn(3, ':').collect();
+        let mut bytes = BASE64.decode(parts[2]).unwrap();
+        if !bytes.is_empty() {
+            bytes[0] ^= 0xFF; // Flip bits
+        }
+        let tampered = format!("{}:{}:{}", parts[0], parts[1], BASE64.encode(&bytes));
+
+        let result = engine.decrypt("tamper-bytes", &tampered).await;
+        assert!(matches!(result, Err(TransitError::DecryptionFailed)));
+    }
+
+    #[tokio::test]
+    async fn test_wrong_version_in_ciphertext() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("wrong-ver", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("wrong-ver", b"data").await.unwrap();
+
+        // Change version number in ciphertext from v1 to v2
+        let fake_v2 = ciphertext.replace("egide:v1:", "egide:v2:");
+
+        // Should fail - v2 doesn't exist
+        let result = engine.decrypt("wrong-ver", &fake_v2).await;
+        assert!(matches!(result, Err(TransitError::VersionNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_invalid_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("cfg-ver", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Try to set min_encryption_version higher than latest
+        let result = engine
+            .update_key_config("cfg-ver", Some(99), None, None)
+            .await;
+        assert!(matches!(result, Err(TransitError::VersionNotFound { .. })));
+
+        // Try to set min_decryption_version higher than latest
+        let result = engine
+            .update_key_config("cfg-ver", None, Some(99), None)
+            .await;
+        assert!(matches!(result, Err(TransitError::VersionNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_list_versions_nonexistent_key() {
+        let (_tmp, engine) = setup().await;
+
+        let result = engine.list_versions("nonexistent").await;
+        assert!(matches!(result, Err(TransitError::KeyNotFound(_))));
+    }
+
+    // ========================================================================
+    // Integration Tests - Full Workflows
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_full_lifecycle() {
+        let (_tmp, engine) = setup().await;
+
+        // 1. Create key
+        let key = engine
+            .create_key("lifecycle", KeyConfig::new())
+            .await
+            .unwrap();
+        assert_eq!(key.latest_version, 1);
+
+        // 2. Encrypt some data
+        let ct1 = engine
+            .encrypt("lifecycle", b"initial-secret")
+            .await
+            .unwrap();
+
+        // 3. Rotate key
+        let v2 = engine.rotate_key("lifecycle").await.unwrap();
+        assert_eq!(v2, 2);
+
+        // 4. Encrypt more data with new version
+        let ct2 = engine.encrypt("lifecycle", b"new-secret").await.unwrap();
+
+        // 5. Both should decrypt
+        assert_eq!(
+            engine.decrypt("lifecycle", &ct1).await.unwrap(),
+            b"initial-secret"
+        );
+        assert_eq!(
+            engine.decrypt("lifecycle", &ct2).await.unwrap(),
+            b"new-secret"
+        );
+
+        // 6. Rewrap old ciphertext
+        let ct1_rewrapped = engine.rewrap("lifecycle", &ct1).await.unwrap();
+        assert!(ct1_rewrapped.starts_with("egide:v2:"));
+        assert_eq!(
+            engine.decrypt("lifecycle", &ct1_rewrapped).await.unwrap(),
+            b"initial-secret"
+        );
+
+        // 7. Update min_decryption_version to deprecate v1
+        engine
+            .update_key_config("lifecycle", None, Some(2), None)
+            .await
+            .unwrap();
+
+        // 8. Old ct1 should now fail
+        let result = engine.decrypt("lifecycle", &ct1).await;
+        assert!(matches!(
+            result,
+            Err(TransitError::VersionBelowMinDecryption { .. })
+        ));
+
+        // 9. Rewrapped version should still work
+        assert_eq!(
+            engine.decrypt("lifecycle", &ct1_rewrapped).await.unwrap(),
+            b"initial-secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_envelope_encryption_workflow() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("envelope-kek", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Simulate envelope encryption workflow
+        // 1. Generate a data key
+        let datakey = engine.generate_datakey("envelope-kek").await.unwrap();
+
+        // 2. Client uses plaintext key to encrypt their data (simulated)
+        let client_data = b"sensitive application data";
+        let client_encrypted =
+            egide_crypto::aead::encrypt(&datakey.plaintext, client_data, Some(b"app-context"))
+                .unwrap();
+
+        // 3. Client stores wrapped key alongside their encrypted data
+        let stored_wrapped_key = datakey.ciphertext.clone();
+
+        // 4. Later, client needs to decrypt
+        // 4a. Unwrap the data key
+        let recovered_dek = engine
+            .decrypt_datakey("envelope-kek", &stored_wrapped_key)
+            .await
+            .unwrap();
+        assert_eq!(recovered_dek, datakey.plaintext);
+
+        // 4b. Client decrypts their data with recovered key
+        let decrypted =
+            egide_crypto::aead::decrypt(&recovered_dek, &client_encrypted, Some(b"app-context"))
+                .unwrap();
+        assert_eq!(&decrypted[..], client_data);
+    }
+
+    #[tokio::test]
+    async fn test_multi_key_workflow() {
+        let (_tmp, engine) = setup().await;
+
+        // Create keys for different purposes
+        engine
+            .create_key("users-key", KeyConfig::new())
+            .await
+            .unwrap();
+        engine
+            .create_key("payments-key", KeyConfig::new())
+            .await
+            .unwrap();
+        engine
+            .create_key("logs-key", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Encrypt different data types
+        let user_ct = engine
+            .encrypt("users-key", b"user@email.com")
+            .await
+            .unwrap();
+        let payment_ct = engine
+            .encrypt("payments-key", b"4111111111111111")
+            .await
+            .unwrap();
+        let log_ct = engine
+            .encrypt("logs-key", b"debug log entry")
+            .await
+            .unwrap();
+
+        // Verify isolation - can't cross-decrypt
+        assert!(engine.decrypt("payments-key", &user_ct).await.is_err());
+        assert!(engine.decrypt("logs-key", &payment_ct).await.is_err());
+        assert!(engine.decrypt("users-key", &log_ct).await.is_err());
+
+        // Correct decryption works
+        assert_eq!(
+            engine.decrypt("users-key", &user_ct).await.unwrap(),
+            b"user@email.com"
+        );
+        assert_eq!(
+            engine.decrypt("payments-key", &payment_ct).await.unwrap(),
+            b"4111111111111111"
+        );
+        assert_eq!(
+            engine.decrypt("logs-key", &log_ct).await.unwrap(),
+            b"debug log entry"
+        );
+    }
+
+    // ========================================================================
+    // Persistence Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_persistence_across_restart() {
+        let tmp = TempDir::new().unwrap();
+        let master_key = MasterKey::generate();
+        let master_key_bytes = master_key.as_bytes().to_vec();
+
+        // First session: create key and encrypt
+        let ciphertext = {
+            let engine = TransitEngine::new(tmp.path(), master_key).await.unwrap();
+            engine
+                .create_key("persist-key", KeyConfig::new())
+                .await
+                .unwrap();
+            engine.rotate_key("persist-key").await.unwrap();
+            engine
+                .encrypt("persist-key", b"persisted-data")
+                .await
+                .unwrap()
+        };
+        // Engine dropped here
+
+        // Second session: recover with same master key
+        {
+            let master_key2 = MasterKey::from_bytes(&master_key_bytes).unwrap();
+            let engine2 = TransitEngine::new(tmp.path(), master_key2).await.unwrap();
+
+            // Key should exist
+            let key = engine2.get_key("persist-key").await.unwrap();
+            assert_eq!(key.latest_version, 2);
+
+            // Should decrypt data from previous session
+            let decrypted = engine2.decrypt("persist-key", &ciphertext).await.unwrap();
+            assert_eq!(decrypted, b"persisted-data");
+
+            // Should be able to continue rotating
+            let v3 = engine2.rotate_key("persist-key").await.unwrap();
+            assert_eq!(v3, 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wrong_master_key_fails() {
+        let tmp = TempDir::new().unwrap();
+
+        // First session: create and encrypt
+        let ciphertext = {
+            let master_key1 = MasterKey::generate();
+            let engine = TransitEngine::new(tmp.path(), master_key1).await.unwrap();
+            engine
+                .create_key("wrong-mk", KeyConfig::new())
+                .await
+                .unwrap();
+            engine.encrypt("wrong-mk", b"data").await.unwrap()
+        };
+
+        // Second session: different master key
+        {
+            let master_key2 = MasterKey::generate(); // Different key!
+            let engine2 = TransitEngine::new(tmp.path(), master_key2).await.unwrap();
+
+            // Key metadata exists but decryption should fail
+            let key = engine2.get_key("wrong-mk").await.unwrap();
+            assert_eq!(key.name, "wrong-mk");
+
+            // Decryption fails because key material was encrypted with different master
+            let result = engine2.decrypt("wrong-mk", &ciphertext).await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_encryptions() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("concurrent", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // Encrypt many items "concurrently" (sequential in test but simulates load)
+        let mut ciphertexts = Vec::new();
+        for i in 0..100 {
+            let data = format!("message-{}", i);
+            let ct = engine.encrypt("concurrent", data.as_bytes()).await.unwrap();
+            ciphertexts.push((data, ct));
+        }
+
+        // All should decrypt correctly
+        for (original, ct) in ciphertexts {
+            let decrypted = engine.decrypt("concurrent", &ct).await.unwrap();
+            assert_eq!(String::from_utf8(decrypted).unwrap(), original);
+        }
+    }
 }
