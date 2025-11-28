@@ -11,25 +11,76 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use async_trait::async_trait;
+use egide_auth::{
+    AuthBackend, AuthContext, AuthError, NubsterIdentityBackend, NubsterIdentityConfig,
+    RootTokenBackend,
+};
 use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
 use egide_secrets::SecretsEngine;
+use egide_storage::StorageBackend;
 
 // ============================================================================
-// Authentication
+// Authentication Service
 // ============================================================================
 
 /// Header name for the authentication token.
 const AUTH_HEADER: &str = "X-Egide-Token";
 
+/// Combined authentication service that tries multiple backends.
+pub struct AuthService {
+    backends: Vec<Box<dyn AuthBackend>>,
+}
+
+impl AuthService {
+    /// Creates a new auth service with the given backends.
+    pub fn new(backends: Vec<Box<dyn AuthBackend>>) -> Self {
+        Self { backends }
+    }
+
+    /// Validates a token against all configured backends.
+    pub async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
+        for backend in &self.backends {
+            match backend.validate(token).await {
+                Ok(ctx) => {
+                    tracing::debug!(backend = backend.name(), account = %ctx.account_id, "Auth success");
+                    return Ok(ctx);
+                },
+                Err(AuthError::TokenExpired) => {
+                    // Token expired is a definitive error, don't try other backends
+                    return Err(AuthError::TokenExpired);
+                },
+                Err(_) => {
+                    // Try next backend
+                    continue;
+                },
+            }
+        }
+        Err(AuthError::InvalidCredentials)
+    }
+}
+
+#[async_trait]
+impl AuthBackend for AuthService {
+    async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
+        AuthService::validate(self, token).await
+    }
+
+    fn name(&self) -> &'static str {
+        "auth-service"
+    }
+}
+
 /// Authenticated request extractor.
-/// Validates the X-Egide-Token header against the stored root token.
-pub struct Authenticated;
+///
+/// Validates the X-Egide-Token header and returns the authentication context.
+pub struct Authenticated(pub AuthContext);
 
 impl FromRequestParts<Arc<AppState>> for Authenticated {
     type Rejection = (StatusCode, Json<ErrorResponse>);
@@ -52,27 +103,23 @@ impl FromRequestParts<Arc<AppState>> for Authenticated {
                 )
             })?;
 
-        // Verify token against seal manager
-        let seal = state.seal.read().await;
-        let valid = seal.verify_root_token(token).await.map_err(|e| {
+        // Validate via auth service
+        let ctx = state.auth.validate(token).await.map_err(|e| {
+            let (status, message) = match e {
+                AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "token expired"),
+                AuthError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid credentials"),
+                AuthError::MissingToken => (StatusCode::UNAUTHORIZED, "missing token"),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "authentication failed"),
+            };
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(ErrorResponse {
-                    error: format!("token verification failed: {}", e),
+                    error: message.into(),
                 }),
             )
         })?;
 
-        if !valid {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "invalid authentication token".into(),
-                }),
-            ));
-        }
-
-        Ok(Authenticated)
+        Ok(Authenticated(ctx))
     }
 }
 
@@ -80,22 +127,57 @@ impl FromRequestParts<Arc<AppState>> for Authenticated {
 // CLI Arguments
 // ============================================================================
 
+/// Authentication backend type.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum AuthBackendType {
+    /// Nubster.Identity JWT validation (for Cloud and Workspace OnPrem).
+    NubsterIdentity,
+    /// Root token validation (for dev mode and Standalone OnPrem).
+    #[default]
+    RootToken,
+}
+
 #[derive(Parser)]
 #[command(name = "egide-server")]
 #[command(about = "Nubster Egide - Secrets management server")]
 #[command(version)]
 struct Cli {
-    /// Data directory for persistent storage
+    /// Data directory for persistent storage.
     #[arg(long, default_value = "./data", env = "EGIDE_DATA_DIR")]
     data_dir: PathBuf,
 
-    /// Enable development mode (auto-unseal, NOT FOR PRODUCTION)
+    /// Enable development mode (auto-unseal, NOT FOR PRODUCTION).
     #[arg(long, env = "EGIDE_DEV_MODE")]
     dev: bool,
 
-    /// Server bind address
+    /// Server bind address.
     #[arg(long, default_value = "0.0.0.0:8200", env = "EGIDE_BIND_ADDRESS")]
     bind: String,
+
+    /// Authentication backend to use.
+    #[arg(
+        long,
+        value_enum,
+        default_value = "root-token",
+        env = "EGIDE_AUTH_BACKEND"
+    )]
+    auth_backend: AuthBackendType,
+
+    /// Nubster.Identity JWT secret (required for nubster-identity backend).
+    #[arg(long, env = "EGIDE_IDENTITY_JWT_SECRET")]
+    identity_jwt_secret: Option<String>,
+
+    /// Nubster.Identity issuer URL.
+    #[arg(
+        long,
+        default_value = "https://api.nubster.com",
+        env = "EGIDE_IDENTITY_ISSUER"
+    )]
+    identity_issuer: String,
+
+    /// Nubster.Identity audience.
+    #[arg(long, default_value = "egide", env = "EGIDE_IDENTITY_AUDIENCE")]
+    identity_audience: String,
 }
 
 // ============================================================================
@@ -104,6 +186,8 @@ struct Cli {
 
 /// Shared application state.
 pub struct AppState {
+    /// Authentication service.
+    pub auth: AuthService,
     /// Seal manager (handles init/seal/unseal).
     pub seal: RwLock<SealManager>,
     /// Secrets engine (available only when unsealed).
@@ -418,10 +502,12 @@ async fn seal_handler(
 // ============================================================================
 
 async fn secrets_get_handler(
-    _auth: Authenticated,
+    Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Result<Json<SecretResponse>, (StatusCode, Json<ErrorResponse>)> {
+    tracing::debug!(account = %ctx.account_id, path = %path, "secrets.get");
+
     let secrets = state.secrets.read().await;
     let engine = secrets.as_ref().ok_or_else(|| {
         (
@@ -456,11 +542,13 @@ async fn secrets_get_handler(
 }
 
 async fn secrets_put_handler(
-    _auth: Authenticated,
+    Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(path): axum::extract::Path<String>,
     Json(req): Json<SecretPutRequest>,
 ) -> Result<Json<SecretWriteResponse>, (StatusCode, Json<ErrorResponse>)> {
+    tracing::debug!(account = %ctx.account_id, path = %path, "secrets.put");
+
     let secrets = state.secrets.read().await;
     let engine = secrets.as_ref().ok_or_else(|| {
         (
@@ -494,10 +582,12 @@ async fn secrets_put_handler(
 }
 
 async fn secrets_delete_handler(
-    _auth: Authenticated,
+    Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    tracing::debug!(account = %ctx.account_id, path = %path, "secrets.delete");
+
     let secrets = state.secrets.read().await;
     let engine = secrets.as_ref().ok_or_else(|| {
         (
@@ -521,9 +611,11 @@ async fn secrets_delete_handler(
 }
 
 async fn secrets_list_root_handler(
-    _auth: Authenticated,
+    Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SecretListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    tracing::debug!(account = %ctx.account_id, "secrets.list");
+
     let secrets = state.secrets.read().await;
     let engine = secrets.as_ref().ok_or_else(|| {
         (
@@ -555,6 +647,57 @@ async fn secrets_list_root_handler(
 fn base64_encode(data: &[u8]) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine};
     STANDARD.encode(data)
+}
+
+/// Creates the auth service based on CLI configuration.
+fn create_auth_service(cli: &Cli, seal_manager: &SealManager) -> anyhow::Result<AuthService> {
+    let mut backends: Vec<Box<dyn AuthBackend>> = Vec::new();
+
+    match cli.auth_backend {
+        AuthBackendType::NubsterIdentity => {
+            let jwt_secret = cli.identity_jwt_secret.clone().ok_or_else(|| {
+                anyhow::anyhow!("--identity-jwt-secret is required for nubster-identity backend")
+            })?;
+
+            let config = NubsterIdentityConfig {
+                jwt_secret,
+                issuer: cli.identity_issuer.clone(),
+                audience: cli.identity_audience.clone(),
+            };
+
+            tracing::info!(
+                issuer = %config.issuer,
+                audience = %config.audience,
+                "Auth backend: Nubster.Identity"
+            );
+
+            backends.push(Box::new(NubsterIdentityBackend::new(config)));
+        },
+        AuthBackendType::RootToken => {
+            tracing::info!("Auth backend: Root Token");
+
+            // Create a closure that reads from the seal manager's storage
+            let storage = seal_manager.storage().clone();
+            let get_hash = Arc::new(move || {
+                // This is a synchronous closure, but we're reading from SQLite
+                // which supports sync reads. In practice, we cache the hash.
+                let storage = storage.clone();
+                let rt = tokio::runtime::Handle::try_current().ok()?;
+                rt.block_on(async {
+                    storage
+                        .get("root_token_hash")
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                })
+            });
+
+            backends.push(Box::new(RootTokenBackend::new(get_hash)));
+        },
+    }
+
+    Ok(AuthService::new(backends))
 }
 
 // ============================================================================
@@ -595,7 +738,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Dev mode: auto-unseal enabled");
     }
 
+    // Create auth service
+    let auth_service = create_auth_service(&cli, &seal_manager)?;
+
     let state = Arc::new(AppState {
+        auth: auth_service,
         seal: RwLock::new(seal_manager),
         secrets: RwLock::new(None),
         data_dir: cli.data_dir.clone(),

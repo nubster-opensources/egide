@@ -1,6 +1,6 @@
 [package]
 name = "egide-auth"
-description = "Egide authentication - Token, AppRole, OIDC, mTLS"
+description = "Egide authentication - Multi-backend auth with Nubster.Identity integration"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,23 @@ repository.workspace = true
 egide-crypto = { path = "../../core/egide-crypto" }
 egide-storage = { path = "../../storage/egide-storage" }
 
-thiserror.workspace = true
+# JWT validation
+jsonwebtoken = "9"
+
+# Async
+tokio = { workspace = true }
+async-trait = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Crypto (for root token validation with Argon2)
+argon2 = "0.5"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rand = { workspace = true }
