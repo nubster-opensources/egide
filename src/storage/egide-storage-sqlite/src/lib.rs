@@ -163,6 +163,65 @@ impl SqliteBackend {
             .expect("system time before UNIX epoch")
             .as_secs() as i64
     }
+
+    /// Returns the current actor, if set.
+    pub fn current_actor(&self) -> Option<String> {
+        self.actor.clone()
+    }
+
+    /// Executes raw SQL statements (for migrations/schema creation).
+    pub async fn execute_raw(&self, sql: &str) -> Result<(), StorageError> {
+        for statement in sql.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(statement.trim())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Executes a SQL statement with parameters.
+    pub async fn execute(&self, sql: &str, params: &[&str]) -> Result<(), StorageError> {
+        let mut query = sqlx::query(sql);
+        for param in params {
+            query = query.bind(*param);
+        }
+        query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Queries a single row with typed results.
+    pub async fn query_one<T>(&self, sql: &str, params: &[&str]) -> Result<Option<T>, StorageError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+    {
+        let mut query = sqlx::query_as::<_, T>(sql);
+        for param in params {
+            query = query.bind(*param);
+        }
+        query
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))
+    }
+
+    /// Queries multiple rows with typed results.
+    pub async fn query_all<T>(&self, sql: &str, params: &[&str]) -> Result<Vec<T>, StorageError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
+    {
+        let mut query = sqlx::query_as::<_, T>(sql);
+        for param in params {
+            query = query.bind(*param);
+        }
+        query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))
+    }
 }
 
 #[async_trait]

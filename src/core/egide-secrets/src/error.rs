@@ -22,6 +22,23 @@ pub enum SecretsError {
     #[error("secret has expired: {0}")]
     Expired(String),
 
+    /// Secret is deleted.
+    #[error("secret is deleted: {0}")]
+    Deleted(String),
+
+    /// Secret is not deleted (cannot undelete).
+    #[error("secret is not deleted: {0}")]
+    NotDeleted(String),
+
+    /// CAS (check-and-set) version mismatch.
+    #[error("version mismatch: expected {expected}, found {found}")]
+    VersionMismatch {
+        /// Expected version.
+        expected: u32,
+        /// Actual version.
+        found: u32,
+    },
+
     /// Invalid secret path.
     #[error("invalid secret path: {0}")]
     InvalidPath(String),
@@ -32,5 +49,17 @@ pub enum SecretsError {
 
     /// Cryptographic error.
     #[error("crypto error: {0}")]
-    Crypto(#[from] egide_crypto::CryptoError),
+    Crypto(String),
+}
+
+impl From<egide_crypto::CryptoError> for SecretsError {
+    fn from(e: egide_crypto::CryptoError) -> Self {
+        SecretsError::Crypto(e.to_string())
+    }
+}
+
+impl From<egide_storage::StorageError> for SecretsError {
+    fn from(e: egide_storage::StorageError) -> Self {
+        SecretsError::Storage(e.to_string())
+    }
 }
