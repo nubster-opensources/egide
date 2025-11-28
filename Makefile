@@ -49,8 +49,8 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
-## Run all quality checks (format, lint, test, audit)
-ci: fmt-check lint test audit
+## Run all quality checks (mirrors GitHub CI)
+ci: fmt-check lint test audit deny
 
 # ============================================================================
 # Release
@@ -188,7 +188,7 @@ help:
 	@echo "  lint           Run clippy linter"
 	@echo "  fmt            Format code"
 	@echo "  fmt-check      Check formatting"
-	@echo "  ci             Run all quality checks (format, lint, test)"
+	@echo "  ci             Run all quality checks (mirrors GitHub CI)"
 	@echo ""
 	@echo "Release:"
 	@echo "  release        Build release binaries"
