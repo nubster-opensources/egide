@@ -10,6 +10,16 @@ repository.workspace = true
 
 [dependencies]
 egide-crypto = { path = "../egide-crypto" }
-egide-kms = { path = "../egide-kms" }
+egide-storage = { path = "../../storage/egide-storage" }
+egide-storage-sqlite = { path = "../../storage/egide-storage-sqlite" }
 
+async-trait.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile = "3.14"
