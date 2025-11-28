@@ -545,9 +545,13 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "clap",
  "egide-api",
  "egide-auth",
+ "egide-crypto",
+ "egide-seal",
+ "egide-secrets",
  "egide-storage",
  "egide-storage-sqlite",
  "serde",
