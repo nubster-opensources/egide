@@ -444,6 +444,13 @@ impl SealManager {
 
         Ok(verify_token(token, hash_str))
     }
+
+    /// Returns a clone of the storage backend.
+    ///
+    /// This is useful for external components that need to read system data.
+    pub fn storage(&self) -> SqliteBackend {
+        self.storage.clone()
+    }
 }
 
 /// Computes HMAC-SHA256 of the master key for verification.

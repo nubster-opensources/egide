@@ -42,3 +42,6 @@ tarpaulin-report.html
 
 # Benchmarks
 criterion/
+
+# Test data (local development)
+test-data/

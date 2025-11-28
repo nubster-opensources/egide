@@ -22,6 +22,9 @@ members = [
 
     # CLI
     "src/cli/egide-cli",
+
+    # Integration tests
+    "tests/integration",
 ]
 
 [workspace.package]

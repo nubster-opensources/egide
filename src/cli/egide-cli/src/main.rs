@@ -1,10 +1,17 @@
 //! Egide CLI - Command line interface.
 
+use std::collections::HashMap;
+use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// CLI Structure
+// ============================================================================
 
 #[derive(Parser)]
 #[command(name = "egide")]
@@ -35,22 +42,7 @@ enum Commands {
         #[command(subcommand)]
         command: SecretsCommands,
     },
-    /// Transit encryption
-    Transit {
-        #[command(subcommand)]
-        command: TransitCommands,
-    },
-    /// KMS operations
-    Kms {
-        #[command(subcommand)]
-        command: KmsCommands,
-    },
-    /// PKI operations
-    Pki {
-        #[command(subcommand)]
-        command: PkiCommands,
-    },
-    /// Check server status (used for health checks)
+    /// Check server status
     Status,
 }
 
@@ -67,7 +59,7 @@ enum OperatorCommands {
     },
     /// Unseal the server
     Unseal {
-        /// Unseal key
+        /// Unseal key (or read from stdin if not provided)
         key: Option<String>,
     },
     /// Seal the server
@@ -80,6 +72,12 @@ enum SecretsCommands {
     Get {
         /// Secret path
         path: String,
+        /// Output format (json, value)
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Specific field to extract (only with format=value)
+        #[arg(long)]
+        field: Option<String>,
     },
     /// Store a secret
     Put {
@@ -95,75 +93,13 @@ enum SecretsCommands {
         path: String,
     },
     /// List secrets
-    List {
-        /// Path prefix
-        #[arg(default_value = "")]
-        prefix: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum TransitCommands {
-    /// Encrypt data
-    Encrypt {
-        /// Key name
-        key: String,
-        /// Plaintext (or read from stdin)
-        plaintext: Option<String>,
-    },
-    /// Decrypt data
-    Decrypt {
-        /// Key name
-        key: String,
-        /// Ciphertext
-        ciphertext: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum KmsCommands {
-    /// Create a new key
-    Create {
-        /// Key name
-        name: String,
-        /// Key type (aes256, rsa2048, rsa4096, ecdsa-p256, ed25519)
-        #[arg(long, default_value = "aes256")]
-        key_type: String,
-    },
-    /// List keys
-    List,
-    /// Rotate a key
-    Rotate {
-        /// Key name
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum PkiCommands {
-    /// Initialize CA
-    InitCa {
-        /// Common name
-        #[arg(long)]
-        cn: String,
-        /// Organization
-        #[arg(long)]
-        org: Option<String>,
-    },
-    /// Issue a certificate
-    Issue {
-        /// Common name
-        #[arg(long)]
-        cn: String,
-        /// Template name
-        #[arg(long, default_value = "server")]
-        template: String,
-    },
-    /// List certificates
     List,
 }
 
-/// Health response from server.
+// ============================================================================
+// API Types
+// ============================================================================
+
 #[derive(Debug, Deserialize)]
 struct HealthResponse {
     status: String,
@@ -173,166 +109,475 @@ struct HealthResponse {
     uptime_secs: u64,
 }
 
-/// Check server health by calling the /v1/sys/health endpoint.
-async fn check_status(addr: &str) -> anyhow::Result<HealthResponse> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("Failed to create HTTP client")?;
-
-    let url = format!("{}/v1/sys/health", addr.trim_end_matches('/'));
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("Failed to connect to Egide server at {}", addr))?;
-
-    if !response.status().is_success() {
-        bail!(
-            "Server returned error status: {} {}",
-            response.status().as_u16(),
-            response.status().canonical_reason().unwrap_or("Unknown")
-        );
-    }
-
-    let health: HealthResponse = response
-        .json()
-        .await
-        .context("Failed to parse health response")?;
-
-    Ok(health)
+#[derive(Serialize)]
+struct InitRequest {
+    secret_shares: u8,
+    secret_threshold: u8,
 }
 
+#[derive(Debug, Deserialize)]
+struct InitResponse {
+    root_token: String,
+    keys: Vec<String>,
+    keys_base64: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct UnsealRequest {
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnsealResponse {
+    sealed: bool,
+    threshold: u8,
+    progress: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct SealResponse {
+    sealed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+#[derive(Serialize)]
+struct SecretPutRequest {
+    data: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretResponse {
+    data: HashMap<String, String>,
+    #[allow(dead_code)]
+    metadata: SecretMetadata,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct SecretMetadata {
+    version: u32,
+    created_at: u64,
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretWriteResponse {
+    version: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretListResponse {
+    keys: Vec<String>,
+}
+
+// ============================================================================
+// HTTP Client
+// ============================================================================
+
+struct EgideClient {
+    client: Client,
+    base_url: String,
+    token: Option<String>,
+}
+
+impl EgideClient {
+    fn new(base_url: &str, token: Option<String>) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        Ok(Self {
+            client,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            token,
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    async fn get_health(&self) -> Result<HealthResponse> {
+        let resp = self
+            .client
+            .get(self.url("/v1/sys/health"))
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Server error: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn init(&self, shares: u8, threshold: u8) -> Result<InitResponse> {
+        let req = InitRequest {
+            secret_shares: shares,
+            secret_threshold: threshold,
+        };
+
+        let resp = self
+            .client
+            .post(self.url("/v1/sys/init"))
+            .json(&req)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Init failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
+        let req = UnsealRequest {
+            key: key.to_string(),
+        };
+
+        let resp = self
+            .client
+            .post(self.url("/v1/sys/unseal"))
+            .json(&req)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Unseal failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn seal(&self) -> Result<SealResponse> {
+        let mut req = self.client.post(self.url("/v1/sys/seal"));
+
+        if let Some(token) = &self.token {
+            req = req.header("X-Egide-Token", token);
+        }
+
+        let resp = req.send().await.context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Seal failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn secret_get(&self, path: &str) -> Result<SecretResponse> {
+        let token = self
+            .token
+            .as_ref()
+            .context("Authentication token required. Set EGIDE_TOKEN or use --token")?;
+
+        let resp = self
+            .client
+            .get(self.url(&format!("/v1/secrets/{}", path)))
+            .header("X-Egide-Token", token)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Get secret failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn secret_put(
+        &self,
+        path: &str,
+        data: HashMap<String, String>,
+    ) -> Result<SecretWriteResponse> {
+        let token = self
+            .token
+            .as_ref()
+            .context("Authentication token required. Set EGIDE_TOKEN or use --token")?;
+
+        let req = SecretPutRequest { data };
+
+        let resp = self
+            .client
+            .put(self.url(&format!("/v1/secrets/{}", path)))
+            .header("X-Egide-Token", token)
+            .json(&req)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Put secret failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn secret_delete(&self, path: &str) -> Result<()> {
+        let token = self
+            .token
+            .as_ref()
+            .context("Authentication token required. Set EGIDE_TOKEN or use --token")?;
+
+        let resp = self
+            .client
+            .delete(self.url(&format!("/v1/secrets/{}", path)))
+            .header("X-Egide-Token", token)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("Delete secret failed: {}", error.error);
+        }
+
+        Ok(())
+    }
+
+    async fn secret_list(&self) -> Result<SecretListResponse> {
+        let token = self
+            .token
+            .as_ref()
+            .context("Authentication token required. Set EGIDE_TOKEN or use --token")?;
+
+        let resp = self
+            .client
+            .get(self.url("/v1/secrets"))
+            .header("X-Egide-Token", token)
+            .send()
+            .await
+            .context("Failed to connect to server")?;
+
+        if !resp.status().is_success() {
+            let error: ErrorResponse = resp.json().await.unwrap_or(ErrorResponse {
+                error: "Unknown error".into(),
+            });
+            bail!("List secrets failed: {}", error.error);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+}
+
+// ============================================================================
+// Command Handlers
+// ============================================================================
+
+async fn cmd_status(client: &EgideClient) -> Result<()> {
+    let health = client.get_health().await?;
+
+    println!("Egide server status:");
+    println!("  Status:      {}", health.status);
+    println!("  Version:     {}", health.version);
+    println!("  Initialized: {}", health.initialized);
+    println!("  Sealed:      {}", health.sealed);
+    println!("  Uptime:      {}s", health.uptime_secs);
+
+    Ok(())
+}
+
+async fn cmd_operator_init(client: &EgideClient, shares: u8, threshold: u8) -> Result<()> {
+    println!(
+        "Initializing Egide with {} shares, threshold {}...",
+        shares, threshold
+    );
+
+    let result = client.init(shares, threshold).await?;
+
+    println!();
+    println!("Egide initialized successfully!");
+    println!();
+    println!("Unseal Keys (hex):");
+    for (i, key) in result.keys.iter().enumerate() {
+        println!("  Key {}: {}", i + 1, key);
+    }
+    println!();
+    println!("Unseal Keys (base64):");
+    for (i, key) in result.keys_base64.iter().enumerate() {
+        println!("  Key {}: {}", i + 1, key);
+    }
+    println!();
+    println!("Root Token: {}", result.root_token);
+    println!();
+    println!("IMPORTANT: Save these keys securely! They are required to unseal Egide.");
+    println!("The root token is needed for administrative operations.");
+
+    Ok(())
+}
+
+async fn cmd_operator_unseal(client: &EgideClient, key: Option<String>) -> Result<()> {
+    let key = match key {
+        Some(k) => k,
+        None => {
+            print!("Enter unseal key: ");
+            io::stdout().flush()?;
+            let stdin = io::stdin();
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line)?;
+            line.trim().to_string()
+        },
+    };
+
+    if key.is_empty() {
+        bail!("Unseal key cannot be empty");
+    }
+
+    let result = client.unseal(&key).await?;
+
+    if result.sealed {
+        println!(
+            "Unseal progress: {}/{} keys provided",
+            result.progress, result.threshold
+        );
+        println!("Egide is still sealed. Provide more keys to complete unseal.");
+    } else {
+        println!("Egide is now unsealed!");
+    }
+
+    Ok(())
+}
+
+async fn cmd_operator_seal(client: &EgideClient) -> Result<()> {
+    let result = client.seal().await?;
+
+    if result.sealed {
+        println!("Egide is now sealed.");
+    } else {
+        println!("Warning: Seal operation returned but vault reports unsealed.");
+    }
+
+    Ok(())
+}
+
+async fn cmd_secrets_get(
+    client: &EgideClient,
+    path: &str,
+    format: &str,
+    field: Option<&str>,
+) -> Result<()> {
+    let secret = client.secret_get(path).await?;
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&secret.data)?);
+        },
+        "value" => {
+            if let Some(field) = field {
+                if let Some(value) = secret.data.get(field) {
+                    println!("{}", value);
+                } else {
+                    bail!("Field '{}' not found in secret", field);
+                }
+            } else {
+                for (k, v) in &secret.data {
+                    println!("{}={}", k, v);
+                }
+            }
+        },
+        _ => bail!("Unknown format: {}. Use 'json' or 'value'", format),
+    }
+
+    Ok(())
+}
+
+async fn cmd_secrets_put(client: &EgideClient, path: &str, pairs: &[String]) -> Result<()> {
+    let mut data = HashMap::new();
+
+    for pair in pairs {
+        let parts: Vec<&str> = pair.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            bail!("Invalid key=value pair: {}. Use format: key=value", pair);
+        }
+        data.insert(parts[0].to_string(), parts[1].to_string());
+    }
+
+    let result = client.secret_put(path, data).await?;
+
+    println!("Secret written successfully (version {})", result.version);
+
+    Ok(())
+}
+
+async fn cmd_secrets_delete(client: &EgideClient, path: &str) -> Result<()> {
+    client.secret_delete(path).await?;
+    println!("Secret '{}' deleted", path);
+    Ok(())
+}
+
+async fn cmd_secrets_list(client: &EgideClient) -> Result<()> {
+    let result = client.secret_list().await?;
+
+    if result.keys.is_empty() {
+        println!("No secrets found");
+    } else {
+        println!("Secrets:");
+        for key in &result.keys {
+            println!("  {}", key);
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let client = EgideClient::new(&cli.addr, cli.token)?;
 
     match cli.command {
-        Commands::Status => match check_status(&cli.addr).await {
-            Ok(health) => {
-                println!("Egide server at {} is healthy", cli.addr);
-                println!("  Status:      {}", health.status);
-                println!("  Version:     {}", health.version);
-                println!("  Initialized: {}", health.initialized);
-                println!("  Sealed:      {}", health.sealed);
-                println!("  Uptime:      {}s", health.uptime_secs);
-                Ok(())
-            },
-            Err(e) => {
-                eprintln!("Egide server at {} is unhealthy: {}", cli.addr, e);
-                std::process::exit(1);
-            },
+        Commands::Status => cmd_status(&client).await,
+        Commands::Operator { command } => match command {
+            OperatorCommands::Init {
+                key_shares,
+                key_threshold,
+            } => cmd_operator_init(&client, key_shares, key_threshold).await,
+            OperatorCommands::Unseal { key } => cmd_operator_unseal(&client, key).await,
+            OperatorCommands::Seal => cmd_operator_seal(&client).await,
         },
-        Commands::Operator { command } => {
-            match command {
-                OperatorCommands::Init {
-                    key_shares,
-                    key_threshold,
-                } => {
-                    println!(
-                        "Initializing Egide with {} shares, threshold {}...",
-                        key_shares, key_threshold
-                    );
-                    // TODO: Implement init
-                    Ok(())
-                },
-                OperatorCommands::Unseal { key: _key } => {
-                    println!("Unsealing Egide...");
-                    // TODO: Implement unseal
-                    Ok(())
-                },
-                OperatorCommands::Seal => {
-                    println!("Sealing Egide...");
-                    // TODO: Implement seal
-                    Ok(())
-                },
-            }
-        },
-        Commands::Secrets { command } => {
-            match command {
-                SecretsCommands::Get { path } => {
-                    println!("Getting secret: {}", path);
-                    // TODO: Implement get
-                    Ok(())
-                },
-                SecretsCommands::Put { path, data: _data } => {
-                    println!("Storing secret: {}", path);
-                    // TODO: Implement put
-                    Ok(())
-                },
-                SecretsCommands::Delete { path } => {
-                    println!("Deleting secret: {}", path);
-                    // TODO: Implement delete
-                    Ok(())
-                },
-                SecretsCommands::List { prefix } => {
-                    println!("Listing secrets with prefix: {}", prefix);
-                    // TODO: Implement list
-                    Ok(())
-                },
-            }
-        },
-        Commands::Transit { command } => {
-            match command {
-                TransitCommands::Encrypt {
-                    key,
-                    plaintext: _plaintext,
-                } => {
-                    println!("Encrypting with key: {}", key);
-                    // TODO: Implement encrypt
-                    Ok(())
-                },
-                TransitCommands::Decrypt {
-                    key,
-                    ciphertext: _ciphertext,
-                } => {
-                    println!("Decrypting with key: {}", key);
-                    // TODO: Implement decrypt
-                    Ok(())
-                },
-            }
-        },
-        Commands::Kms { command } => {
-            match command {
-                KmsCommands::Create { name, key_type } => {
-                    println!("Creating key {} of type {}", name, key_type);
-                    // TODO: Implement create
-                    Ok(())
-                },
-                KmsCommands::List => {
-                    println!("Listing keys...");
-                    // TODO: Implement list
-                    Ok(())
-                },
-                KmsCommands::Rotate { name } => {
-                    println!("Rotating key: {}", name);
-                    // TODO: Implement rotate
-                    Ok(())
-                },
-            }
-        },
-        Commands::Pki { command } => {
-            match command {
-                PkiCommands::InitCa { cn, org: _org } => {
-                    println!("Initializing CA with CN: {}", cn);
-                    // TODO: Implement init-ca
-                    Ok(())
-                },
-                PkiCommands::Issue {
-                    cn,
-                    template: _template,
-                } => {
-                    println!("Issuing certificate for: {}", cn);
-                    // TODO: Implement issue
-                    Ok(())
-                },
-                PkiCommands::List => {
-                    println!("Listing certificates...");
-                    // TODO: Implement list
-                    Ok(())
-                },
-            }
+        Commands::Secrets { command } => match command {
+            SecretsCommands::Get {
+                path,
+                format,
+                field,
+            } => cmd_secrets_get(&client, &path, &format, field.as_deref()).await,
+            SecretsCommands::Put { path, data } => cmd_secrets_put(&client, &path, &data).await,
+            SecretsCommands::Delete { path } => cmd_secrets_delete(&client, &path).await,
+            SecretsCommands::List => cmd_secrets_list(&client).await,
         },
     }
 }

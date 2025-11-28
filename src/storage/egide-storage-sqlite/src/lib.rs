@@ -18,6 +18,7 @@ use egide_storage::{StorageBackend, StorageError};
 ///
 /// Each tenant gets its own database file at `{base_path}/{tenant}.db`.
 /// This ensures complete data isolation between tenants.
+#[derive(Clone)]
 pub struct SqliteBackend {
     pool: SqlitePool,
     actor: Option<String>,

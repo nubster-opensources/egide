@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage 1: Build
 # =============================================================================
-FROM rust:1.79-bookworm AS builder
+FROM rust:1.91-bookworm AS builder
 
 WORKDIR /app
 
@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests first for dependency caching
 COPY Cargo.toml Cargo.lock ./
 COPY src/core/egide-crypto/Cargo.toml src/core/egide-crypto/
+COPY src/core/egide-seal/Cargo.toml src/core/egide-seal/
 COPY src/core/egide-secrets/Cargo.toml src/core/egide-secrets/
 COPY src/core/egide-kms/Cargo.toml src/core/egide-kms/
 COPY src/core/egide-pki/Cargo.toml src/core/egide-pki/
@@ -28,6 +29,7 @@ COPY src/cli/egide-cli/Cargo.toml src/cli/egide-cli/
 
 # Create dummy source files for dependency caching
 RUN mkdir -p src/core/egide-crypto/src && echo "pub mod error; pub use error::CryptoError;" > src/core/egide-crypto/src/lib.rs && echo "use thiserror::Error; #[derive(Debug, Error)] pub enum CryptoError { #[error(\"error\")] Error }" > src/core/egide-crypto/src/error.rs
+RUN mkdir -p src/core/egide-seal/src && echo "" > src/core/egide-seal/src/lib.rs
 RUN mkdir -p src/core/egide-secrets/src && echo "" > src/core/egide-secrets/src/lib.rs
 RUN mkdir -p src/core/egide-kms/src && echo "" > src/core/egide-kms/src/lib.rs
 RUN mkdir -p src/core/egide-pki/src && echo "" > src/core/egide-pki/src/lib.rs
@@ -90,4 +92,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Default command
 ENTRYPOINT ["egide-server"]
-CMD ["--bind", "0.0.0.0:8200"]
+CMD ["--data-dir", "/var/lib/egide", "--bind", "0.0.0.0:8200"]
