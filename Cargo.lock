@@ -593,9 +593,17 @@ dependencies = [
 name = "egide-transit"
 version = "0.1.0-alpha"
 dependencies = [
+ "async-trait",
+ "base64",
  "egide-crypto",
- "egide-kms",
+ "egide-storage",
+ "egide-storage-sqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
