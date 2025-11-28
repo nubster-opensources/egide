@@ -484,6 +484,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "egide-integration-tests"
+version = "0.1.0-alpha"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "egide-kms"
 version = "0.1.0-alpha"
 dependencies = [
