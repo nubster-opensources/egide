@@ -24,7 +24,6 @@ use egide_auth::{
 };
 use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
 use egide_secrets::SecretsEngine;
-use egide_storage::StorageBackend;
 
 // ============================================================================
 // Authentication Service
@@ -676,24 +675,9 @@ fn create_auth_service(cli: &Cli, seal_manager: &SealManager) -> anyhow::Result<
         AuthBackendType::RootToken => {
             tracing::info!("Auth backend: Root Token");
 
-            // Create a closure that reads from the seal manager's storage
-            let storage = seal_manager.storage().clone();
-            let get_hash = Arc::new(move || {
-                // This is a synchronous closure, but we're reading from SQLite
-                // which supports sync reads. In practice, we cache the hash.
-                let storage = storage.clone();
-                let rt = tokio::runtime::Handle::try_current().ok()?;
-                rt.block_on(async {
-                    storage
-                        .get("root_token_hash")
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                })
-            });
-
-            backends.push(Box::new(RootTokenBackend::new(get_hash)));
+            // Pass the storage directly - RootTokenBackend reads async in validate()
+            let storage = Arc::new(seal_manager.storage().clone());
+            backends.push(Box::new(RootTokenBackend::new(storage)));
         },
     }
 

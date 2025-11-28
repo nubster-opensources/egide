@@ -38,4 +38,4 @@ pub use backend::AuthBackend;
 pub use context::{AuthContext, AuthMethod};
 pub use error::AuthError;
 pub use nubster_identity::{NubsterIdentityBackend, NubsterIdentityConfig};
-pub use root_token::{RootTokenBackend, RootTokenHashFn};
+pub use root_token::{RootTokenBackend, ROOT_TOKEN_HASH_KEY};

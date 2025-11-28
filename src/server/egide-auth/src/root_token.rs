@@ -4,58 +4,47 @@
 
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use async_trait::async_trait;
+use egide_storage::StorageBackend;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::{AuthBackend, AuthContext, AuthError};
 
-/// Callback for retrieving the stored root token hash.
-///
-/// This allows the backend to be decoupled from the storage implementation.
-pub type RootTokenHashFn = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+/// The storage key for the root token hash.
+pub const ROOT_TOKEN_HASH_KEY: &str = "root_token_hash";
 
 /// Authentication backend for root tokens.
 ///
 /// This backend validates tokens against a stored Argon2id hash.
 /// Used for dev mode and legacy single-token authentication.
-pub struct RootTokenBackend {
-    /// Function to get the current root token hash.
-    get_hash: RootTokenHashFn,
-    /// Cached hash for performance (updated on each validation).
-    cached_hash: RwLock<Option<String>>,
+pub struct RootTokenBackend<S: StorageBackend> {
+    /// Storage backend for reading the root token hash.
+    storage: Arc<S>,
 }
 
-impl RootTokenBackend {
+impl<S: StorageBackend> RootTokenBackend<S> {
     /// Creates a new root token backend.
     ///
     /// # Arguments
     ///
-    /// * `get_hash` - Callback that returns the stored Argon2id hash of the root token.
-    pub fn new(get_hash: RootTokenHashFn) -> Self {
-        Self {
-            get_hash,
-            cached_hash: RwLock::new(None),
-        }
-    }
-
-    /// Creates a backend with a static hash (for testing).
-    pub fn with_static_hash(hash: String) -> Self {
-        let hash_clone = hash.clone();
-        Self::new(Arc::new(move || Some(hash_clone.clone())))
+    /// * `storage` - Storage backend to read the root token hash from.
+    pub fn new(storage: Arc<S>) -> Self {
+        Self { storage }
     }
 }
 
 #[async_trait]
-impl AuthBackend for RootTokenBackend {
+impl<S: StorageBackend + 'static> AuthBackend for RootTokenBackend<S> {
     async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
-        // Get the stored hash
-        let hash = (self.get_hash)().ok_or(AuthError::TokenNotFound)?;
+        // Get the stored hash from storage (async!)
+        let hash_bytes = self
+            .storage
+            .get(ROOT_TOKEN_HASH_KEY)
+            .await
+            .map_err(|e| AuthError::Storage(e.to_string()))?
+            .ok_or(AuthError::TokenNotFound)?;
 
-        // Update cache
-        {
-            let mut cache = self.cached_hash.write().await;
-            *cache = Some(hash.clone());
-        }
+        let hash =
+            String::from_utf8(hash_bytes).map_err(|_| AuthError::Storage("invalid hash".into()))?;
 
         // Parse the hash
         let parsed_hash =
@@ -82,7 +71,10 @@ impl AuthBackend for RootTokenBackend {
 mod tests {
     use super::*;
     use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+    use egide_storage::StorageError;
     use rand::rngs::OsRng;
+    use std::collections::HashMap;
+    use tokio::sync::RwLock;
 
     fn hash_token(token: &str) -> String {
         let salt = SaltString::generate(&mut OsRng);
@@ -93,12 +85,63 @@ mod tests {
             .to_string()
     }
 
+    /// In-memory storage for testing.
+    struct MemoryStorage {
+        data: RwLock<HashMap<String, Vec<u8>>>,
+    }
+
+    impl MemoryStorage {
+        fn new() -> Self {
+            Self {
+                data: RwLock::new(HashMap::new()),
+            }
+        }
+
+        async fn set(&self, key: &str, value: Vec<u8>) {
+            self.data.write().await.insert(key.to_string(), value);
+        }
+    }
+
+    #[async_trait]
+    impl StorageBackend for MemoryStorage {
+        async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+            Ok(self.data.read().await.get(key).cloned())
+        }
+
+        async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+            self.data
+                .write()
+                .await
+                .insert(key.to_string(), value.to_vec());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            self.data.write().await.remove(key);
+            Ok(())
+        }
+
+        async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+            Ok(self
+                .data
+                .read()
+                .await
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned()
+                .collect())
+        }
+    }
+
     #[tokio::test]
     async fn test_valid_root_token() {
         let token = "my-secret-root-token";
         let hash = hash_token(token);
 
-        let backend = RootTokenBackend::with_static_hash(hash);
+        let storage = Arc::new(MemoryStorage::new());
+        storage.set(ROOT_TOKEN_HASH_KEY, hash.into_bytes()).await;
+
+        let backend = RootTokenBackend::new(storage);
         let ctx = backend.validate(token).await.expect("validation failed");
 
         assert_eq!(ctx.account_id, "root");
@@ -110,7 +153,10 @@ mod tests {
         let token = "my-secret-root-token";
         let hash = hash_token(token);
 
-        let backend = RootTokenBackend::with_static_hash(hash);
+        let storage = Arc::new(MemoryStorage::new());
+        storage.set(ROOT_TOKEN_HASH_KEY, hash.into_bytes()).await;
+
+        let backend = RootTokenBackend::new(storage);
         let result = backend.validate("wrong-token").await;
 
         assert!(matches!(result, Err(AuthError::InvalidCredentials)));
@@ -118,7 +164,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_hash_stored() {
-        let backend = RootTokenBackend::new(Arc::new(|| None));
+        let storage = Arc::new(MemoryStorage::new());
+        let backend = RootTokenBackend::new(storage);
         let result = backend.validate("any-token").await;
 
         assert!(matches!(result, Err(AuthError::TokenNotFound)));
