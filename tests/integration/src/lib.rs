@@ -381,11 +381,20 @@ mod tests {
         let base_url = format!("http://127.0.0.1:{}", port);
         let client = EgideClient::new(&base_url);
 
-        // Wait for server to start
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Wait for server to be ready (robust wait with retries)
+        let mut health = None;
+        for _ in 0..50 {
+            match client.health().await {
+                Ok(h) => {
+                    health = Some(h);
+                    break;
+                },
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
 
         // 1. Check initial state - should be uninitialized
-        let health = client.health().await.unwrap();
+        let health = health.expect("Server failed to start within 5 seconds");
         assert!(!health.initialized, "Should not be initialized yet");
         assert!(health.sealed, "Should be sealed");
 
