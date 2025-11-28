@@ -70,19 +70,14 @@ CREATE INDEX IF NOT EXISTS idx_transit_key_versions_name ON transit_key_versions
 // ============================================================================
 
 /// Supported key types for transit encryption.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeyType {
     /// AES-256-GCM (default, widely compatible).
+    #[default]
     Aes256Gcm,
     /// ChaCha20-Poly1305 (fast on systems without AES-NI).
     ChaCha20Poly1305,
-}
-
-impl Default for KeyType {
-    fn default() -> Self {
-        Self::Aes256Gcm
-    }
 }
 
 impl std::fmt::Display for KeyType {
