@@ -1,0 +1,15 @@
+[package]
+name = "egide-storage-postgres"
+description = "PostgreSQL storage backend for Egide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egide-storage = { path = "../egide-storage" }
+
+async-trait.workspace = true
+thiserror.workspace = true

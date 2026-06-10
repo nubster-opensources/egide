@@ -1,0 +1,20 @@
+[package]
+name = "egide-crypto"
+description = "Core cryptographic primitives for Egide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+aes-gcm.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+hex = "0.4"
