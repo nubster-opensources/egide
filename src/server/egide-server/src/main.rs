@@ -472,8 +472,18 @@ async fn unseal_handler(
 }
 
 async fn seal_handler(
+    Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SealResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !ctx.is_root() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "seal requires root privileges".into(),
+            }),
+        ));
+    }
+
     {
         let mut seal = state.seal.write().await;
 
