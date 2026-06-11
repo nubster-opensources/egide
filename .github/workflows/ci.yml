@@ -17,20 +17,9 @@ env:
 jobs:
   ci:
     name: CI
-    runs-on: [self-hosted, rust]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          CARGO_HOME="${RUNNER_TEMP}/cargo"
-          RUSTUP_HOME="${RUNNER_TEMP}/rustup"
-          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
-          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
-          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
