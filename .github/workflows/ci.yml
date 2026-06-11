@@ -39,7 +39,7 @@ jobs:
       - name: Install security tools
         run: |
           command -v cargo-audit || cargo install cargo-audit --locked
-          command -v cargo-deny || cargo install cargo-deny@0.18.3 --locked
+          command -v cargo-deny || cargo install cargo-deny@0.19.6 --locked
 
       - name: Format
         run: cargo fmt --all -- --check
