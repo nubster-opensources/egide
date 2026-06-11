@@ -341,5 +341,5 @@ let session = egide.transit.decrypt("session-key", &token)?;
 ## Next Steps
 
 - [Storage Architecture](./storage.md)
-- [API Reference — Transit](../api/transit.md)
+- [API Reference: Transit](../api/transit.md)
 - [KMS Engine Architecture](./kms-engine.md)

@@ -313,4 +313,4 @@ CREATE INDEX idx_pki_certs_revoked ON pki_certificates(revoked_at) WHERE revoked
 
 - [Transit Engine Architecture](./transit-engine.md)
 - [Storage Architecture](./storage.md)
-- [API Reference — PKI](../api/pki.md)
+- [API Reference: PKI](../api/pki.md)

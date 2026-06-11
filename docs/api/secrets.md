@@ -308,5 +308,5 @@ PATCH /v1/secrets/:path/metadata
 
 ## Next Steps
 
-- [KMS API](kms.md) — Key management API
-- [Transit API](transit.md) — Encryption API
+- [KMS API](kms.md): Key management API
+- [Transit API](transit.md): Encryption API

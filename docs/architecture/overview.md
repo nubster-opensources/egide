@@ -60,8 +60,8 @@ This document provides a comprehensive overview of Egide's architecture.
 
 The API layer handles all client communication through:
 
-- **REST API** — Standard HTTP endpoints for all operations
-- **gRPC API** — High-performance binary protocol for service-to-service communication
+- **REST API**: Standard HTTP endpoints for all operations
+- **gRPC API**: High-performance binary protocol for service-to-service communication
 
 ### 2. Authentication Layer
 
@@ -79,9 +79,9 @@ Supports multiple authentication methods:
 
 Fine-grained access control through:
 
-- **Policy Engine** — Path-based policies with capabilities
-- **RBAC** — Role-based access control
-- **ACLs** — Access control lists for fine-grained permissions
+- **Policy Engine**: Path-based policies with capabilities
+- **RBAC**: Role-based access control
+- **ACLs**: Access control lists for fine-grained permissions
 
 ### 4. Engines
 
@@ -98,17 +98,17 @@ Each engine handles a specific domain:
 
 Low-level cryptographic operations:
 
-- **Symmetric** — AES-256-GCM
-- **Asymmetric** — RSA, ECDSA, Ed25519
-- **Key Derivation** — HKDF, PBKDF2
-- **Secret Sharing** — Shamir's Secret Sharing
+- **Symmetric**: AES-256-GCM
+- **Asymmetric**: RSA, ECDSA, Ed25519
+- **Key Derivation**: HKDF, PBKDF2
+- **Secret Sharing**: Shamir's Secret Sharing
 
 ### 6. Storage Backend
 
 Pluggable storage backends:
 
-- **PostgreSQL** — Production deployments
-- **SQLite** — Development and standalone deployments
+- **PostgreSQL**: Production deployments
+- **SQLite**: Development and standalone deployments
 
 ## Data Flow
 
@@ -156,10 +156,10 @@ Client                 Egide
 
 ### Trust Boundaries
 
-1. **Client → API** — TLS encryption, authentication required
-2. **API → Engines** — Internal, trusted
-3. **Engines → Crypto** — Internal, trusted
-4. **Crypto → Storage** — Data encrypted before storage
+1. **Client → API**: TLS encryption, authentication required
+2. **API → Engines**: Internal, trusted
+3. **Engines → Crypto**: Internal, trusted
+4. **Crypto → Storage**: Data encrypted before storage
 
 ### Encryption Layers
 

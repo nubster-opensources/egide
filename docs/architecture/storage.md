@@ -157,7 +157,7 @@ ssl_root_cert = "/etc/egide/ca.crt"
 
 ## SQLite Backend
 
-### SQLLite Use Case
+### SQLite Use Case
 
 - Development and testing
 - Single-node deployments

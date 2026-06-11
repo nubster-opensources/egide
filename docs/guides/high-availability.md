@@ -325,5 +325,5 @@ fi
 
 ## Next Steps
 
-- [Backup & Recovery](backup.md) — Backup strategies
-- [Production Deployment](production.md) — Production best practices
+- [Backup & Recovery](backup.md): Backup strategies
+- [Production Deployment](production.md): Production best practices

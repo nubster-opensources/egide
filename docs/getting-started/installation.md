@@ -96,8 +96,8 @@ cargo build --release
 ```
 
 Binaries will be available in `target/release/`:
-- `egide-server` — The server binary
-- `egide` — The CLI tool
+- `egide-server`: the server binary
+- `egide`: the CLI tool
 
 ### Install
 
@@ -108,5 +108,5 @@ sudo cp target/release/egide /usr/local/bin/
 
 ## Next Steps
 
-- [Quick Start](quick-start.md) — Initialize and start using Egide
-- [Configuration](configuration.md) — Configure Egide for your environment
+- [Quick Start](quick-start.md): Initialize and start using Egide
+- [Configuration](configuration.md): Configure Egide for your environment

@@ -202,7 +202,7 @@ X-RateLimit-Reset: 1642248000
 
 ## SDKs
 
-Official SDKs are available for:
+Official SDKs are planned for:
 
 - Rust: `egide-sdk`
 - .NET: `Nubster.Egide.SDK`
@@ -212,6 +212,6 @@ Official SDKs are available for:
 
 ## Next Steps
 
-- [Secrets API](secrets.md) — Secrets endpoint reference
-- [KMS API](kms.md) — KMS endpoint reference
-- [Authentication](../concepts/authentication.md) — Authentication methods
+- [Secrets API](secrets.md): Secrets endpoint reference
+- [KMS API](kms.md): KMS endpoint reference
+- [Authentication](../concepts/authentication.md): Authentication methods

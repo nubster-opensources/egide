@@ -50,8 +50,8 @@ egide operator init
 
 This outputs:
 
-- **Unseal Keys** — Keep these safe! You need them to unseal Egide after restart.
-- **Root Token** — Initial admin token. Revoke after creating other tokens.
+- **Unseal Keys**: keep these safe! You need them to unseal Egide after restart.
+- **Root Token**: initial admin token. Revoke after creating other tokens.
 
 Example output:
 
@@ -150,6 +150,6 @@ egide transit decrypt my-key "egide:v1:XXXXXXXXXXXXXXXXXXXXXXXX"
 
 ## Next Steps
 
-- [Configuration](configuration.md) — Customize Egide settings
-- [Secrets Engine](../concepts/secrets-engine.md) — Learn more about secrets management
-- [Docker Deployment](../guides/docker.md) — Production Docker setup
+- [Configuration](configuration.md): Customize Egide settings
+- [Secrets Engine](../concepts/secrets-engine.md): Learn more about secrets management
+- [Docker Deployment](../guides/docker.md): Production Docker setup

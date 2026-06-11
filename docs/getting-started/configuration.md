@@ -161,5 +161,5 @@ For production, use certificates from your PKI or a trusted CA.
 
 ## Next Steps
 
-- [Architecture](../concepts/architecture.md) — Understand how Egide works
-- [Production Deployment](../guides/production.md) — Production best practices
+- [Architecture](../concepts/architecture.md): Understand how Egide works
+- [Production Deployment](../guides/production.md): Production best practices

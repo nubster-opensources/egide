@@ -59,10 +59,7 @@ When deploying Egide:
 
 ## Security Advisories
 
-Security advisories will be published on:
-
-- GitHub Security Advisories
-- Our website: <https://egide.nubster.com/security>
+Security advisories will be published through GitHub Security Advisories on the [Egide repository](https://github.com/nubster-opensources/egide/security/advisories).
 
 ## Bug Bounty
 

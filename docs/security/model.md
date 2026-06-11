@@ -6,11 +6,11 @@ This document describes Egide's security architecture and threat model.
 
 Egide is designed with defense-in-depth principles:
 
-1. **Encryption at rest** — All data is encrypted before storage
-2. **Encryption in transit** — TLS for all communications
-3. **Access control** — Policy-based authorization
-4. **Audit logging** — Complete audit trail
-5. **Seal/Unseal** — Master key protection
+1. **Encryption at rest**: All data is encrypted before storage
+2. **Encryption in transit**: TLS for all communications
+3. **Access control**: Policy-based authorization
+4. **Audit logging**: Complete audit trail
+5. **Seal/Unseal**: Master key protection
 
 ## Threat Model
 
@@ -289,5 +289,5 @@ On suspected compromise:
 
 ## Next Steps
 
-- [Compliance](compliance.md) — Regulatory compliance
-- [Production Deployment](../guides/production.md) — Production setup
+- [Compliance](compliance.md): Regulatory compliance
+- [Production Deployment](../guides/production.md): Production setup

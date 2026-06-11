@@ -197,9 +197,9 @@ path "secrets/admin/*" {
 
 ### Caching
 
-- **Read Cache** — Recently accessed secrets cached in memory
-- **Cache Invalidation** — On write operations
-- **TTL-based Eviction** — Automatic cleanup
+- **Read Cache**: recently accessed secrets cached in memory
+- **Cache Invalidation**: on write operations
+- **TTL-based Eviction**: automatic cleanup
 
 ### Batch Operations
 
@@ -251,4 +251,4 @@ CREATE INDEX idx_versions_secret ON secret_versions(secret_id, version);
 
 - [KMS Engine Architecture](./kms-engine.md)
 - [PKI Engine Architecture](./pki-engine.md)
-- [API Reference — Secrets](../api/secrets.md)
+- [API Reference: Secrets](../api/secrets.md)

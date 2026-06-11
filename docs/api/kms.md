@@ -319,5 +319,5 @@ GET /v1/kms/keys/:name/export
 
 ## Next Steps
 
-- [Transit API](transit.md) — Encryption as a Service
-- [PKI API](pki.md) — Certificate management
+- [Transit API](transit.md): Encryption as a Service
+- [PKI API](pki.md): Certificate management

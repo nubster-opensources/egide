@@ -265,5 +265,5 @@ After restoration:
 
 ## Next Steps
 
-- [Production Deployment](production.md) — Production best practices
-- [High Availability](high-availability.md) — HA deployment
+- [Production Deployment](production.md): Production best practices
+- [High Availability](high-availability.md): HA deployment

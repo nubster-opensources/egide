@@ -6,11 +6,11 @@ The KMS (Key Management Service) Engine manages cryptographic keys and performs 
 
 The KMS Engine provides:
 
-- **Key Generation** — Create cryptographic keys (AES, RSA, ECDSA, Ed25519)
-- **Key Rotation** — Automatic key versioning with rotation
-- **Encrypt/Decrypt** — Symmetric and asymmetric encryption
-- **Sign/Verify** — Digital signature operations
-- **Key Policies** — Fine-grained access control per key
+- **Key Generation**: Create cryptographic keys (AES, RSA, ECDSA, Ed25519)
+- **Key Rotation**: Automatic key versioning with rotation
+- **Encrypt/Decrypt**: Symmetric and asymmetric encryption
+- **Sign/Verify**: Digital signature operations
+- **Key Policies**: Fine-grained access control per key
 
 ## Key Types
 
@@ -106,8 +106,8 @@ egide:v2:AAAAAAAAAAAAAAAA...
 
 The ciphertext includes:
 
-- `egide:` — Prefix identifier
-- `v2:` — Key version used
+- `egide:`: Prefix identifier
+- `v2:`: Key version used
 - Base64-encoded ciphertext
 
 ### Decrypt Data
@@ -202,5 +202,5 @@ See [KMS API](../api/kms.md) for the complete API reference.
 
 ## Next Steps
 
-- [Transit Engine](transit-engine.md) — Encryption as a Service
-- [PKI Engine](pki-engine.md) — Certificate management
+- [Transit Engine](transit-engine.md): Encryption as a Service
+- [PKI Engine](pki-engine.md): Certificate management
