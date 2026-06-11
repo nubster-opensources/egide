@@ -6,10 +6,10 @@ The PKI (Public Key Infrastructure) Engine provides an internal Certificate Auth
 
 The PKI Engine enables you to:
 
-- **Create Certificate Authorities** — Root and Intermediate CAs
-- **Issue Certificates** — TLS server, client, and code signing certificates
-- **Manage Certificate Lifecycle** — Renewal, revocation, expiration
-- **Certificate Templates** — Predefined profiles for common use cases
+- **Create Certificate Authorities**: Root and Intermediate CAs
+- **Issue Certificates**: TLS server, client, and code signing certificates
+- **Manage Certificate Lifecycle**: Renewal, revocation, expiration
+- **Certificate Templates**: Predefined profiles for common use cases
 
 ## Key Concepts
 
@@ -229,5 +229,5 @@ See [PKI API](../api/pki.md) for the complete API reference.
 
 ## Next Steps
 
-- [Transit Engine](transit-engine.md) — Encryption as a Service
-- [Security Model](../security/model.md) — Security architecture
+- [Transit Engine](transit-engine.md): Encryption as a Service
+- [Security Model](../security/model.md): Security architecture

@@ -1,8 +1,7 @@
 # cargo-deny configuration for Egide
 # https://embarkstudios.github.io/cargo-deny/
 #
-# Run: cargo deny check advisories bans sources
-# (Skip license check - BSL-1.1 is not a valid SPDX identifier)
+# Run: cargo deny check
 #
 # Compatible with cargo-deny 0.18.x
 
@@ -14,6 +13,28 @@ targets = [
     "x86_64-pc-windows-msvc",
 ]
 all-features = true
+
+# =============================================================================
+# Licenses - Allow only permissive licenses compatible with MIT OR Apache-2.0
+# =============================================================================
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+exceptions = []
 
 # =============================================================================
 # Advisories - Check for known vulnerabilities

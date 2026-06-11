@@ -1,6 +1,6 @@
 # Egide Roadmap
 
-> **Vision**: A modern secrets management platform — secure by design, simple to operate, accessible to all.
+> **Vision**: a modern secrets management platform, secure by design, simple to operate, accessible to all.
 
 ---
 

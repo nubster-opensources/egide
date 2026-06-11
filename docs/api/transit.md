@@ -316,5 +316,5 @@ Each context derives a unique key from the master key.
 
 ## Next Steps
 
-- [PKI API](pki.md) — Certificate management
-- [Secrets API](secrets.md) — Secret storage
+- [PKI API](pki.md): Certificate management
+- [Secrets API](secrets.md): Secret storage

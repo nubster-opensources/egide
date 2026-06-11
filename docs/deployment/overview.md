@@ -1,6 +1,6 @@
 # Deployment Overview
 
-This guide covers the different ways to deploy Nubster Egide.
+This guide covers the different ways to deploy Egide.
 
 ## Deployment Options
 

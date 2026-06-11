@@ -325,5 +325,5 @@ GET /v1/pki/ca
 
 ## Next Steps
 
-- [System API](system.md) — System operations
-- [Authentication](../concepts/authentication.md) — Auth methods
+- [System API](system.md): System operations
+- [Authentication](../concepts/authentication.md): Auth methods

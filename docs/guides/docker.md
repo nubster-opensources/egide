@@ -358,5 +358,5 @@ docker exec egide egide operator unseal KEY3
 
 ## Next Steps
 
-- [Production Deployment](production.md) — Production best practices
-- [High Availability](high-availability.md) — HA deployment
+- [Production Deployment](production.md): Production best practices
+- [High Availability](high-availability.md): HA deployment

@@ -273,5 +273,5 @@ All authentication events are logged:
 
 ## Next Steps
 
-- [Security Model](../security/model.md) — Security architecture
-- [API Overview](../api/overview.md) — API authentication
+- [Security Model](../security/model.md): Security architecture
+- [API Overview](../api/overview.md): API authentication

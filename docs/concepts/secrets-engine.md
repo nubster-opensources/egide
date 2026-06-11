@@ -6,10 +6,10 @@ The Secrets Engine provides secure storage for sensitive data such as API keys, 
 
 The Secrets Engine is a versioned key/value store with:
 
-- **Versioning** — Keep history of secret changes with rollback capability
-- **TTL & Expiration** — Automatic expiration of temporary secrets
-- **Metadata** — Custom attributes and tags
-- **Rotation** — Manual and automated secret rotation
+- **Versioning**: Keep history of secret changes with rollback capability
+- **TTL & Expiration**: Automatic expiration of temporary secrets
+- **Metadata**: Custom attributes and tags
+- **Rotation**: Manual and automated secret rotation
 
 ## Key Concepts
 
@@ -202,5 +202,5 @@ See [Secrets API](../api/secrets.md) for the complete API reference.
 
 ## Next Steps
 
-- [KMS Engine](kms-engine.md) — Cryptographic key management
-- [Transit Engine](transit-engine.md) — Encryption as a Service
+- [KMS Engine](kms-engine.md): Cryptographic key management
+- [Transit Engine](transit-engine.md): Encryption as a Service

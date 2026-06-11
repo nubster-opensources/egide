@@ -349,5 +349,5 @@ GET /v1/sys/config
 
 ## Next Steps
 
-- [Authentication](../concepts/authentication.md) — Auth configuration
-- [Production Deployment](../guides/production.md) — Production setup
+- [Authentication](../concepts/authentication.md): Auth configuration
+- [Production Deployment](../guides/production.md): Production setup

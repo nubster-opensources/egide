@@ -139,10 +139,10 @@ metrics_path = "/metrics"
 ```
 
 Key metrics:
-- `egide_requests_total` — Total requests by endpoint
-- `egide_request_duration_seconds` — Request latency
-- `egide_secrets_total` — Number of stored secrets
-- `egide_seal_status` — Seal status (0=unsealed, 1=sealed)
+- `egide_requests_total`: Total requests by endpoint
+- `egide_request_duration_seconds`: Request latency
+- `egide_secrets_total`: Number of stored secrets
+- `egide_seal_status`: Seal status (0=unsealed, 1=sealed)
 
 ### Logging
 
@@ -267,5 +267,5 @@ egide transit rewrap <key-name> --all
 
 ## Next Steps
 
-- [High Availability](high-availability.md) — HA deployment patterns
-- [Backup & Recovery](backup.md) — Backup strategies
+- [High Availability](high-availability.md): HA deployment patterns
+- [Backup & Recovery](backup.md): Backup strategies

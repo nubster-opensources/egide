@@ -194,9 +194,9 @@ Customer Key                    Egide
 
 ### Supported Import Formats
 
-- **Raw** — Base64-encoded key material
-- **PKCS#8** — For RSA and EC keys
-- **JWK** — JSON Web Key format
+- **Raw**: Base64-encoded key material
+- **PKCS#8**: For RSA and EC keys
+- **JWK**: JSON Web Key format
 
 ## Key Export
 
@@ -209,8 +209,8 @@ Customer Key                    Egide
 
 ### Export Formats
 
-- **Wrapped** — Encrypted with another key
-- **JWK** — JSON Web Key (if exportable)
+- **Wrapped**: Encrypted with another key
+- **JWK**: JSON Web Key (if exportable)
 
 ## Key Policies
 
@@ -303,4 +303,4 @@ POST /v1/kms/batch
 
 - [PKI Engine Architecture](./pki-engine.md)
 - [Transit Engine Architecture](./transit-engine.md)
-- [API Reference — KMS](../api/kms.md)
+- [API Reference: KMS](../api/kms.md)

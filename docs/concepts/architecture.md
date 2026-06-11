@@ -95,9 +95,9 @@ Egide uses a seal/unseal mechanism to protect the master encryption key:
 
 Data in Egide is protected by multiple encryption layers:
 
-1. **Master Key** — Protects the encryption key hierarchy
-2. **Data Encryption Key (DEK)** — Encrypts actual data
-3. **Per-Tenant Keys** — Isolation in multi-tenant deployments
+1. **Master Key**: Protects the encryption key hierarchy
+2. **Data Encryption Key (DEK)**: Encrypts actual data
+3. **Per-Tenant Keys**: Isolation in multi-tenant deployments
 
 ### Authentication Flow
 
@@ -228,5 +228,5 @@ For production deployments, Egide can be deployed in HA mode:
 
 ## Next Steps
 
-- [Secrets Engine](secrets-engine.md) — Learn about secrets management
-- [Security Model](../security/model.md) — Deep dive into security
+- [Secrets Engine](secrets-engine.md): Learn about secrets management
+- [Security Model](../security/model.md): Deep dive into security

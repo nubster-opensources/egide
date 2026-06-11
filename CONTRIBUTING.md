@@ -1,4 +1,4 @@
-# Contributing to Nubster Egide
+# Contributing to Egide
 
 Thank you for your interest in contributing to Egide! This document provides guidelines and information for contributors.
 
@@ -104,7 +104,7 @@ cargo fmt --all
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the BSL 1.1 license.
+Egide is dual licensed under the MIT and Apache 2.0 licenses. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
 ## Questions?
 

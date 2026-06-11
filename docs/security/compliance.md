@@ -246,5 +246,5 @@ Egide helps with technical controls but does not address:
 
 ## Next Steps
 
-- [Security Model](model.md) — Technical security details
-- [Production Deployment](../guides/production.md) — Secure deployment
+- [Security Model](model.md): Technical security details
+- [Production Deployment](../guides/production.md): Secure deployment

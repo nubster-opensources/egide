@@ -6,9 +6,9 @@ The Transit Engine provides Encryption as a Service (EaaS), allowing application
 
 With Transit Engine, your applications:
 
-- **Never see encryption keys** — Keys stay in Egide
-- **Delegate cryptography** — Egide handles all crypto operations
-- **Simplify compliance** — Centralized key management and audit
+- **Never see encryption keys**: Keys stay in Egide
+- **Delegate cryptography**: Egide handles all crypto operations
+- **Simplify compliance**: Centralized key management and audit
 
 ## How It Works
 
@@ -262,5 +262,5 @@ See [Transit API](../api/transit.md) for the complete API reference.
 
 ## Next Steps
 
-- [Secrets Engine](secrets-engine.md) — Secret storage
-- [Security Model](../security/model.md) — Security architecture
+- [Secrets Engine](secrets-engine.md): Secret storage
+- [Security Model](../security/model.md): Security architecture
