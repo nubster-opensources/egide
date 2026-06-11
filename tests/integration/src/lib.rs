@@ -70,6 +70,11 @@ pub struct SecretListResponse {
     pub keys: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SealResponse {
+    pub sealed: bool,
+}
+
 // ============================================================================
 // Test Server
 // ============================================================================
@@ -116,19 +121,31 @@ impl TestServer {
         Ok(server)
     }
 
-    /// Wait for the server to be ready to accept connections.
+    /// Wait for the server to be ready to serve requests.
+    ///
+    /// A live `/v1/sys/health` response is not sufficient: in dev mode the
+    /// listener accepts connections while auto-init and auto-unseal are still
+    /// running, leaving a window where health reports `sealed: true`. Tests
+    /// that assert on an unsealed server would flake on that window, so this
+    /// polls until the server is both initialized and unsealed.
     async fn wait_for_ready(&self) -> Result<()> {
         let client = Client::new();
         let url = format!("{}/v1/sys/health", self.base_url);
 
         for _ in 0..50 {
-            match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => return Ok(()),
-                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(health) = resp.json::<HealthResponse>().await {
+                        if health.initialized && !health.sealed {
+                            return Ok(());
+                        }
+                    }
+                }
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        bail!("Server failed to start within 5 seconds")
+        bail!("Server failed to become initialized and unsealed within 5 seconds")
     }
 
     /// Get a configured HTTP client for this server.
@@ -248,6 +265,29 @@ impl EgideClient {
             bail!("Seal failed: {}", resp.text().await?);
         }
         Ok(())
+    }
+
+    /// Posts to /v1/sys/seal and returns the raw HTTP status code.
+    ///
+    /// Used in authentication tests to assert 401/403 without panicking.
+    pub async fn seal_raw(&self) -> Result<u16> {
+        let mut req = self.client.post(self.url("/v1/sys/seal"));
+        if let Some(token) = &self.token {
+            req = req.header("X-Egide-Token", token);
+        }
+        let resp = req.send().await?;
+        Ok(resp.status().as_u16())
+    }
+
+    /// Posts to /v1/sys/seal with an explicit token override and returns the raw HTTP status code.
+    pub async fn seal_raw_with_token(&self, token: &str) -> Result<u16> {
+        let resp = self
+            .client
+            .post(self.url("/v1/sys/seal"))
+            .header("X-Egide-Token", token)
+            .send()
+            .await?;
+        Ok(resp.status().as_u16())
     }
 
     pub async fn secret_put(
@@ -486,4 +526,153 @@ mod tests {
         let result = client.secret_list().await;
         assert!(result.is_err());
     }
+
+    // -------------------------------------------------------------------------
+    // seal authentication tests (issue #7)
+    // -------------------------------------------------------------------------
+
+    /// POST /v1/sys/seal without any token must return 401 Unauthorized.
+    ///
+    /// Before the fix this endpoint has no authentication, so it returns 200.
+    /// The test documents the expected behaviour and will be RED until the fix
+    /// is applied to seal_handler.
+    #[tokio::test]
+    async fn test_seal_requires_token_missing_returns_401() {
+        let port = next_port();
+        let data_dir = TempDir::new().unwrap();
+        let server_binary = find_server_binary().unwrap();
+
+        let mut process = std::process::Command::new(&server_binary)
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{}", port))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let client = EgideClient::new(&base_url);
+
+        // Wait for server
+        for _ in 0..50 {
+            if client.health().await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Initialize and unseal so the vault is in Unsealed state
+        let init = client.init(3, 2).await.unwrap();
+        client.unseal(&init.keys[0]).await.unwrap();
+        client.unseal(&init.keys[1]).await.unwrap();
+
+        // No token: expect 401
+        let status = client.seal_raw().await.unwrap();
+        assert_eq!(
+            status, 401,
+            "seal without token must return 401, got {}",
+            status
+        );
+
+        let _ = process.kill();
+        let _ = process.wait();
+    }
+
+    /// POST /v1/sys/seal with a bogus token must return 401 Unauthorized.
+    #[tokio::test]
+    async fn test_seal_requires_token_invalid_returns_401() {
+        let port = next_port();
+        let data_dir = TempDir::new().unwrap();
+        let server_binary = find_server_binary().unwrap();
+
+        let mut process = std::process::Command::new(&server_binary)
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{}", port))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let client = EgideClient::new(&base_url);
+
+        for _ in 0..50 {
+            if client.health().await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let init = client.init(3, 2).await.unwrap();
+        client.unseal(&init.keys[0]).await.unwrap();
+        client.unseal(&init.keys[1]).await.unwrap();
+
+        // Bogus token: expect 401
+        let status = client
+            .seal_raw_with_token("this-is-not-a-valid-token")
+            .await
+            .unwrap();
+        assert_eq!(
+            status, 401,
+            "seal with invalid token must return 401, got {}",
+            status
+        );
+
+        let _ = process.kill();
+        let _ = process.wait();
+    }
+
+    /// POST /v1/sys/seal with a valid root token must return 200 and sealed=true.
+    #[tokio::test]
+    async fn test_seal_with_root_token_returns_200() {
+        let port = next_port();
+        let data_dir = TempDir::new().unwrap();
+        let server_binary = find_server_binary().unwrap();
+
+        let mut process = std::process::Command::new(&server_binary)
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{}", port))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let client = EgideClient::new(&base_url);
+
+        for _ in 0..50 {
+            if client.health().await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let init = client.init(3, 2).await.unwrap();
+        client.unseal(&init.keys[0]).await.unwrap();
+        client.unseal(&init.keys[1]).await.unwrap();
+
+        // Root token: expect 200
+        let authed_client = client.with_token(&init.root_token);
+        let status = authed_client.seal_raw().await.unwrap();
+        assert_eq!(
+            status, 200,
+            "seal with root token must return 200, got {}",
+            status
+        );
+
+        let _ = process.kill();
+        let _ = process.wait();
+    }
+
+    // Note: the 403 case (authenticated but non-root) is deferred.
+    // The RootToken backend only issues root contexts, so there is no
+    // straightforward way to produce an authenticated non-root token
+    // without wiring up a NubsterIdentity backend in tests.
+    // Coverage: 401 (missing) + 401 (invalid) + 200 (root) are the hard criteria.
 }
