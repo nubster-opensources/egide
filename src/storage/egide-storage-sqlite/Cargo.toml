@@ -1,0 +1,21 @@
+[package]
+name = "egide-storage-sqlite"
+description = "SQLite storage backend for Egide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+egide-storage = { path = "../egide-storage" }
+
+async-trait.workspace = true
+thiserror.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3.14"

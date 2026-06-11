@@ -1,0 +1,33 @@
+# Production deployment - Egide Secrets Manager
+# Usage: docker compose -f deploy/docker/docker-compose.yml up -d
+
+services:
+  egide:
+    image: nubster/egide:${EGIDE_VERSION:-latest}
+    container_name: egide
+    ports:
+      - "8200:8200"
+    environment:
+      - EGIDE_DATA_DIR=/var/lib/egide
+      - EGIDE_BIND_ADDRESS=0.0.0.0:8200
+      - RUST_LOG=${RUST_LOG:-info,egide=info}
+    volumes:
+      - egide-data:/var/lib/egide
+    healthcheck:
+      test: ["CMD", "egide", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+
+volumes:
+  egide-data:

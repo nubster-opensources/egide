@@ -1,0 +1,28 @@
+# Development deployment - Egide Secrets Manager
+# Usage: docker compose -f deploy/docker/docker-compose.dev.yml up --build
+
+services:
+  egide:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: egide-dev
+    ports:
+      - "8200:8200"
+    environment:
+      - EGIDE_DEV_MODE=true
+      - EGIDE_DATA_DIR=/var/lib/egide
+      - EGIDE_BIND_ADDRESS=0.0.0.0:8200
+      - RUST_LOG=debug,egide=debug
+    volumes:
+      - egide-data:/var/lib/egide
+    healthcheck:
+      test: ["CMD", "egide", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  egide-data:
