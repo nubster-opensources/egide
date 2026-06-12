@@ -32,6 +32,7 @@ pub mod context;
 pub mod error;
 pub mod nubster_identity;
 pub mod root_token;
+pub mod service_token;
 
 // Re-exports
 pub use backend::AuthBackend;

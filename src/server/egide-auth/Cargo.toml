@@ -28,7 +28,10 @@ thiserror = { workspace = true }
 
 # Crypto (for root token validation with Argon2)
 argon2 = "0.5"
+sha2 = { workspace = true }
+hex = "0.4"
+subtle = "2.6"
+rand = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rand = { workspace = true }
