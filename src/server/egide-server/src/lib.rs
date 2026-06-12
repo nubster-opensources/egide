@@ -3,6 +3,8 @@
 pub mod problem;
 pub use problem::Problem;
 
+pub mod transit;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +28,7 @@ use egide_auth::{
 };
 use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
 use egide_secrets::SecretsEngine;
+use egide_transit::TransitEngine;
 
 // ============================================================================
 // Authentication Service
@@ -144,6 +147,8 @@ pub struct AppState {
     pub seal: RwLock<SealManager>,
     /// Secrets engine (available only when unsealed).
     pub secrets: RwLock<Option<SecretsEngine>>,
+    /// Transit engine (available only when unsealed).
+    pub transit: RwLock<Option<TransitEngine>>,
     /// Data directory path.
     pub data_dir: PathBuf,
     /// Server start time.
@@ -183,6 +188,35 @@ impl AppState {
         let mut secrets = self.secrets.write().await;
         *secrets = None;
         tracing::info!("Secrets engine cleared");
+    }
+
+    /// Creates the transit engine if unsealed.
+    pub async fn ensure_transit_engine(&self) -> Result<(), String> {
+        let seal = self.seal.read().await;
+        if seal.status() != SealStatus::Unsealed {
+            return Err("Vault is sealed".into());
+        }
+
+        let master_key = seal
+            .master_key()
+            .ok_or_else(|| "Master key not available".to_string())?;
+
+        let mut transit = self.transit.write().await;
+        if transit.is_none() {
+            let engine = TransitEngine::new(&self.data_dir, master_key.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+            *transit = Some(engine);
+            tracing::info!("Transit engine initialized");
+        }
+        Ok(())
+    }
+
+    /// Clears the transit engine (called on seal).
+    pub async fn clear_transit_engine(&self) {
+        let mut transit = self.transit.write().await;
+        *transit = None;
+        tracing::info!("Transit engine cleared");
     }
 }
 
@@ -450,6 +484,12 @@ pub async fn unseal_handler(
                 Json(ErrorResponse { error: e }),
             )
         })?;
+        state.ensure_transit_engine().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
         tracing::info!("Vault unsealed successfully");
     } else {
         tracing::info!(
@@ -497,6 +537,7 @@ pub async fn seal_handler(
 
     // Clear secrets engine
     state.clear_secrets_engine().await;
+    state.clear_transit_engine().await;
     tracing::info!("Vault sealed");
 
     Ok(Json(SealResponse { sealed: true }))
@@ -785,6 +826,22 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/v1/auth/service-tokens/{token_id}",
             delete(service_token_revoke_handler),
         )
+        .route(
+            "/v1/transit/keys",
+            post(transit::create_key_handler).get(transit::list_keys_handler),
+        )
+        .route(
+            "/v1/transit/keys/{name}",
+            get(transit::get_key_handler).delete(transit::delete_key_handler),
+        )
+        .route(
+            "/v1/transit/keys/{name}/rotate",
+            post(transit::rotate_key_handler),
+        )
+        .route("/v1/transit/encrypt/{name}", post(transit::encrypt_handler))
+        .route("/v1/transit/decrypt/{name}", post(transit::decrypt_handler))
+        .route("/v1/transit/datakey/{name}", post(transit::datakey_handler))
+        .route("/v1/transit/rewrap/{name}", post(transit::rewrap_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -831,6 +888,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         auth: auth_service,
         seal: RwLock::new(seal_manager),
         secrets: RwLock::new(None),
+        transit: RwLock::new(None),
         data_dir: cli.data_dir.clone(),
         start_time: Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
@@ -844,6 +902,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             drop(seal);
             state
                 .ensure_secrets_engine()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            state
+                .ensure_transit_engine()
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
         }

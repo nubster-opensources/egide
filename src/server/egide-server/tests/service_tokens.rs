@@ -36,12 +36,14 @@ async fn test_app() -> (tempfile::TempDir, axum::Router, String) {
         auth,
         seal: RwLock::new(seal_manager),
         secrets: RwLock::new(None),
+        transit: RwLock::new(None),
         data_dir: tmp.path().to_path_buf(),
         start_time: Instant::now(),
         version: "0.1.0",
         service_tokens: service_store,
     });
     state.ensure_secrets_engine().await.expect("secrets engine");
+    state.ensure_transit_engine().await.expect("transit engine");
 
     (tmp, build_router(state), root_token)
 }
