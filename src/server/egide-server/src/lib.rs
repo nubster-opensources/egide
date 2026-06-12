@@ -11,7 +11,7 @@ use std::time::Instant;
 use axum::{
     extract::{FromRequestParts, State},
     http::{request::Parts, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use clap::Parser;
@@ -30,9 +30,6 @@ use egide_secrets::SecretsEngine;
 // ============================================================================
 // Authentication Service
 // ============================================================================
-
-/// Header name for the authentication token.
-const AUTH_HEADER: &str = "X-Egide-Token";
 
 /// Combined authentication service that tries multiple backends.
 pub struct AuthService {
@@ -80,44 +77,32 @@ impl AuthBackend for AuthService {
 
 /// Authenticated request extractor.
 ///
-/// Validates the X-Egide-Token header and returns the authentication context.
+/// Validates the `Authorization: Bearer <token>` header (RFC 6750) and returns
+/// the authentication context.
 pub struct Authenticated(pub AuthContext);
 
 impl FromRequestParts<Arc<AppState>> for Authenticated {
-    type Rejection = (StatusCode, Json<ErrorResponse>);
+    type Rejection = Problem;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract token from header
         let token = parts
             .headers
-            .get(AUTH_HEADER)
+            .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        error: "missing authentication token".into(),
-                    }),
-                )
-            })?;
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| Problem::new(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
 
-        // Validate via auth service
         let ctx = state.auth.validate(token).await.map_err(|e| {
-            let (status, message) = match e {
-                AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "token expired"),
-                AuthError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid credentials"),
-                AuthError::MissingToken => (StatusCode::UNAUTHORIZED, "missing token"),
-                _ => (StatusCode::INTERNAL_SERVER_ERROR, "authentication failed"),
+            let detail = match e {
+                AuthError::TokenExpired => "token expired",
+                _ => "invalid credentials",
             };
-            (
-                status,
-                Json(ErrorResponse {
-                    error: message.into(),
-                }),
-            )
+            Problem::new(StatusCode::UNAUTHORIZED, detail)
         })?;
 
         Ok(Authenticated(ctx))

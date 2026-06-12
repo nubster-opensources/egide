@@ -258,7 +258,7 @@ impl EgideClient {
     pub async fn seal(&self) -> Result<()> {
         let mut req = self.client.post(self.url("/v1/sys/seal"));
         if let Some(token) = &self.token {
-            req = req.header("X-Egide-Token", token);
+            req = req.header("Authorization", format!("Bearer {}", token));
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
@@ -273,7 +273,7 @@ impl EgideClient {
     pub async fn seal_raw(&self) -> Result<u16> {
         let mut req = self.client.post(self.url("/v1/sys/seal"));
         if let Some(token) = &self.token {
-            req = req.header("X-Egide-Token", token);
+            req = req.header("Authorization", format!("Bearer {}", token));
         }
         let resp = req.send().await?;
         Ok(resp.status().as_u16())
@@ -284,7 +284,7 @@ impl EgideClient {
         let resp = self
             .client
             .post(self.url("/v1/sys/seal"))
-            .header("X-Egide-Token", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await?;
         Ok(resp.status().as_u16())
@@ -300,7 +300,7 @@ impl EgideClient {
         let resp = self
             .client
             .put(self.url(&format!("/v1/secrets/{}", path)))
-            .header("X-Egide-Token", token)
+            .header("Authorization", format!("Bearer {}", token))
             .json(&req)
             .send()
             .await?;
@@ -315,7 +315,7 @@ impl EgideClient {
         let resp = self
             .client
             .get(self.url(&format!("/v1/secrets/{}", path)))
-            .header("X-Egide-Token", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -329,7 +329,7 @@ impl EgideClient {
         let resp = self
             .client
             .delete(self.url(&format!("/v1/secrets/{}", path)))
-            .header("X-Egide-Token", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -343,7 +343,7 @@ impl EgideClient {
         let resp = self
             .client
             .get(self.url("/v1/secrets"))
-            .header("X-Egide-Token", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -672,7 +672,6 @@ mod tests {
 
     // Note: the 403 case (authenticated but non-root) is deferred.
     // The RootToken backend only issues root contexts, so there is no
-    // straightforward way to produce an authenticated non-root token
-    // without wiring up a NubsterIdentity backend in tests.
+    // straightforward way to produce an authenticated non-root token in tests.
     // Coverage: 401 (missing) + 401 (invalid) + 200 (root) are the hard criteria.
 }
