@@ -1,6 +1,6 @@
 [package]
 name = "egide-auth"
-description = "Egide authentication - Multi-backend auth with Nubster.Identity integration"
+description = "Egide authentication - root-token and native service-token backends"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,6 @@ repository.workspace = true
 [dependencies]
 egide-crypto = { path = "../../core/egide-crypto" }
 egide-storage = { path = "../../storage/egide-storage" }
-
-# JWT validation
-jsonwebtoken = "9"
 
 # Async
 tokio = { workspace = true }
@@ -28,7 +25,10 @@ thiserror = { workspace = true }
 
 # Crypto (for root token validation with Argon2)
 argon2 = "0.5"
+sha2 = { workspace = true }
+hex = "0.4"
+subtle = "2.6"
+rand = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rand = { workspace = true }

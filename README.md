@@ -87,6 +87,29 @@ echo "sensitive data" | egide transit encrypt my-key
 
 > Dev mode auto-unseals and is for local development only. Never run dev mode in production. See the [production checklist](docs/deployment/production-checklist.md).
 
+### Service token provisioning
+
+Egide issues native service tokens (`egst_<id>.<secret>`) for machine-to-machine authentication. All API calls require `Authorization: Bearer <token>`.
+
+The provisioning flow is:
+
+1. **Initialize** the server and collect the root token and Shamir shares.
+2. **Unseal** the server by submitting at least `threshold` shares to `POST /v1/sys/unseal`.
+3. **Create a service token** using the root token:
+
+```bash
+curl -s -X POST http://localhost:8200/v1/auth/service-tokens \
+  -H "Authorization: Bearer <root-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"service_name": "my-service"}' \
+  | jq .
+# Returns: { "token_id": "...", "token": "egst_..." }
+```
+
+4. **Inject the token** into the consuming service as an environment variable or secret. The service then calls any `/v1/secrets/*` endpoint with `Authorization: Bearer egst_...`.
+
+Service tokens can read and write secrets but cannot manage other tokens or perform operator actions such as sealing the server. Only the root token can create, list, or revoke service tokens.
+
 ## Architecture
 
 ```text

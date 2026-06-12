@@ -86,3 +86,23 @@ request_timeout = 30
 
 # Maximum concurrent connections
 max_connections = 1000
+
+# -----------------------------------------------------------------------------
+# Authentication
+# -----------------------------------------------------------------------------
+# Egide v0.1 uses native service tokens for machine-to-machine authentication.
+#
+# Provisioning flow:
+#   1. Initialize the server: POST /v1/sys/init -> root_token + shares
+#   2. Unseal the server:     POST /v1/sys/unseal (repeat >= threshold times)
+#   3. Create a service token (root-only):
+#        POST /v1/auth/service-tokens
+#        Authorization: Bearer <root-token>
+#        Body: { "service_name": "my-service" }
+#        Response: { "token_id": "...", "token": "egst_..." }
+#   4. Inject the returned token into the consuming service.
+#      The service calls /v1/secrets/* with:
+#        Authorization: Bearer egst_...
+#
+# Service tokens can read and write secrets.
+# Only the root token can create, list, or revoke service tokens.
