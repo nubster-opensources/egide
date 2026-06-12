@@ -666,14 +666,20 @@ async fn service_token_create_handler(
         ));
     }
     if req.service_name.trim().is_empty() {
-        return Err(Problem::new(StatusCode::BAD_REQUEST, "service_name must not be empty"));
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "service_name must not be empty",
+        ));
     }
     let (token_id, token) = state
         .service_tokens
         .create(&req.service_name)
         .await
         .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok((StatusCode::CREATED, Json(CreateServiceTokenResponse { token_id, token })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateServiceTokenResponse { token_id, token }),
+    ))
 }
 
 /// Handles GET `/v1/auth/service-tokens`.
@@ -724,7 +730,10 @@ async fn service_token_revoke_handler(
     if existed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(Problem::new(StatusCode::NOT_FOUND, "service token not found"))
+        Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "service token not found",
+        ))
     }
 }
 
