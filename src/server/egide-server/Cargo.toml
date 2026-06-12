@@ -24,6 +24,7 @@ egide-seal = { path = "../../core/egide-seal" }
 egide-secrets = { path = "../../core/egide-secrets" }
 egide-storage = { path = "../../storage/egide-storage" }
 egide-storage-sqlite = { path = "../../storage/egide-storage-sqlite" }
+egide-transit = { path = "../../core/egide-transit" }
 
 tokio.workspace = true
 anyhow.workspace = true
