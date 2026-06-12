@@ -295,6 +295,27 @@ pub struct SecretListResponse {
     keys: Vec<String>,
 }
 
+// Service token types
+
+#[derive(serde::Deserialize)]
+struct CreateServiceTokenRequest {
+    service_name: String,
+}
+
+#[derive(serde::Serialize)]
+struct CreateServiceTokenResponse {
+    token_id: String,
+    token: String,
+}
+
+#[derive(serde::Serialize)]
+struct ServiceTokenMetadata {
+    token_id: String,
+    service_name: String,
+    created_at: u64,
+    revoked_at: Option<u64>,
+}
+
 // ============================================================================
 // Handlers - System
 // ============================================================================
@@ -629,6 +650,85 @@ pub async fn secrets_list_root_handler(
 }
 
 // ============================================================================
+// Handlers - Service Tokens
+// ============================================================================
+
+/// Handles POST `/v1/auth/service-tokens`.
+async fn service_token_create_handler(
+    Authenticated(ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateServiceTokenRequest>,
+) -> Result<(StatusCode, Json<CreateServiceTokenResponse>), Problem> {
+    if !ctx.is_root() {
+        return Err(Problem::new(
+            StatusCode::FORBIDDEN,
+            "service token management requires root privileges",
+        ));
+    }
+    if req.service_name.trim().is_empty() {
+        return Err(Problem::new(StatusCode::BAD_REQUEST, "service_name must not be empty"));
+    }
+    let (token_id, token) = state
+        .service_tokens
+        .create(&req.service_name)
+        .await
+        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(CreateServiceTokenResponse { token_id, token })))
+}
+
+/// Handles GET `/v1/auth/service-tokens`.
+async fn service_token_list_handler(
+    Authenticated(ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ServiceTokenMetadata>>, Problem> {
+    if !ctx.is_root() {
+        return Err(Problem::new(
+            StatusCode::FORBIDDEN,
+            "service token management requires root privileges",
+        ));
+    }
+    let records = state
+        .service_tokens
+        .list()
+        .await
+        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let metadata = records
+        .into_iter()
+        .map(|r| ServiceTokenMetadata {
+            token_id: r.token_id,
+            service_name: r.service_name,
+            created_at: r.created_at,
+            revoked_at: r.revoked_at,
+        })
+        .collect();
+    Ok(Json(metadata))
+}
+
+/// Handles DELETE `/v1/auth/service-tokens/{token_id}`.
+async fn service_token_revoke_handler(
+    Authenticated(ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(token_id): axum::extract::Path<String>,
+) -> Result<StatusCode, Problem> {
+    if !ctx.is_root() {
+        return Err(Problem::new(
+            StatusCode::FORBIDDEN,
+            "service token management requires root privileges",
+        ));
+    }
+    let existed = state
+        .service_tokens
+        .revoke(&token_id)
+        .await
+        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if existed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Problem::new(StatusCode::NOT_FOUND, "service token not found"))
+    }
+}
+
+// ============================================================================
 // Utilities
 // ============================================================================
 
@@ -667,6 +767,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(secrets_get_handler)
                 .put(secrets_put_handler)
                 .delete(secrets_delete_handler),
+        )
+        .route(
+            "/v1/auth/service-tokens",
+            post(service_token_create_handler).get(service_token_list_handler),
+        )
+        .route(
+            "/v1/auth/service-tokens/{token_id}",
+            delete(service_token_revoke_handler),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
