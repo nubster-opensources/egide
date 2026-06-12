@@ -578,6 +578,7 @@ dependencies = [
  "egide-storage-sqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
