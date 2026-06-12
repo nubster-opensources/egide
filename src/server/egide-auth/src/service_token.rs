@@ -50,10 +50,12 @@ pub fn hash_secret(secret: &str) -> String {
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use egide_storage::StorageBackend;
 use rand::RngCore;
+use subtle::ConstantTimeEq;
 
-use crate::AuthError;
+use crate::{AuthBackend, AuthContext, AuthError, AuthMethod};
 
 /// Stores and manages native service tokens via the raw storage backend.
 #[derive(Clone)]
@@ -104,7 +106,7 @@ impl ServiceTokenStore {
                 let record = serde_json::from_slice(&bytes)
                     .map_err(|e| AuthError::Storage(e.to_string()))?;
                 Ok(Some(record))
-            }
+            },
             None => Ok(None),
         }
     }
@@ -142,7 +144,7 @@ impl ServiceTokenStore {
                     self.write(&record).await?;
                 }
                 Ok(true)
-            }
+            },
             None => Ok(false),
         }
     }
@@ -161,6 +163,51 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Authentication backend validating native service tokens.
+pub struct ServiceTokenBackend {
+    store: ServiceTokenStore,
+}
+
+impl ServiceTokenBackend {
+    /// Creates a new backend over the given store.
+    pub fn new(store: ServiceTokenStore) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl AuthBackend for ServiceTokenBackend {
+    async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
+        let (token_id, secret) = parse_token(token).ok_or(AuthError::InvalidCredentials)?;
+        let record = self
+            .store
+            .lookup(&token_id)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+
+        if record.revoked_at.is_some() {
+            return Err(AuthError::InvalidCredentials);
+        }
+
+        let candidate = hash_secret(&secret);
+        if !bool::from(candidate.as_bytes().ct_eq(record.secret_hash.as_bytes())) {
+            return Err(AuthError::InvalidCredentials);
+        }
+
+        Ok(AuthContext {
+            account_id: record.service_name,
+            email: None,
+            display_name: None,
+            auth_method: AuthMethod::ServiceToken,
+            expires_at: None,
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "service-token"
+    }
 }
 
 #[cfg(test)]
@@ -192,7 +239,10 @@ mod tests {
         }
 
         async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
-            self.data.lock().await.insert(key.to_string(), value.to_vec());
+            self.data
+                .lock()
+                .await
+                .insert(key.to_string(), value.to_vec());
             Ok(())
         }
 
@@ -220,9 +270,13 @@ mod tests {
     #[tokio::test]
     async fn create_then_lookup_roundtrip() {
         let s = store();
-        let (token_id, raw_token) = s.create("my-service").await.unwrap();
+        let (token_id, raw_token) = s.create("my-service").await.expect("create failed");
         assert!(raw_token.starts_with("egst_"));
-        let record = s.lookup(&token_id).await.unwrap().expect("record must exist");
+        let record = s
+            .lookup(&token_id)
+            .await
+            .expect("lookup failed")
+            .expect("record must exist");
         assert_eq!(record.service_name, "my-service");
         assert_eq!(record.token_id, token_id);
         assert!(record.revoked_at.is_none());
@@ -231,16 +285,16 @@ mod tests {
     #[tokio::test]
     async fn lookup_unknown_returns_none() {
         let s = store();
-        let result = s.lookup("nonexistent").await.unwrap();
+        let result = s.lookup("nonexistent").await.expect("lookup failed");
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn list_returns_created_records() {
         let s = store();
-        s.create("svc-a").await.unwrap();
-        s.create("svc-b").await.unwrap();
-        let records = s.list().await.unwrap();
+        s.create("svc-a").await.expect("create svc-a failed");
+        s.create("svc-b").await.expect("create svc-b failed");
+        let records = s.list().await.expect("list failed");
         assert_eq!(records.len(), 2);
         let names: Vec<&str> = records.iter().map(|r| r.service_name.as_str()).collect();
         assert!(names.contains(&"svc-a"));
@@ -250,15 +304,19 @@ mod tests {
     #[tokio::test]
     async fn revoke_marks_record_and_reports_existence() {
         let s = store();
-        let (token_id, _) = s.create("svc").await.unwrap();
+        let (token_id, _) = s.create("svc").await.expect("create failed");
 
-        let existed = s.revoke(&token_id).await.unwrap();
+        let existed = s.revoke(&token_id).await.expect("revoke failed");
         assert!(existed);
 
-        let record = s.lookup(&token_id).await.unwrap().expect("record must exist after revoke");
+        let record = s
+            .lookup(&token_id)
+            .await
+            .expect("lookup failed")
+            .expect("record must exist after revoke");
         assert!(record.revoked_at.is_some());
 
-        let not_found = s.revoke("unknown-id").await.unwrap();
+        let not_found = s.revoke("unknown-id").await.expect("revoke failed");
         assert!(!not_found);
     }
 
@@ -295,5 +353,86 @@ mod tests {
         assert_eq!(h.len(), 64);
         assert_eq!(h, hash_secret("hello"));
         assert_ne!(h, hash_secret("world"));
+    }
+
+    #[tokio::test]
+    async fn validates_a_live_token() {
+        let s = store();
+        let backend = ServiceTokenBackend::new(s.clone());
+        let (_, raw_token) = s.create("my-svc").await.expect("create failed");
+        let ctx = backend.validate(&raw_token).await.expect("validate failed");
+        assert_eq!(ctx.account_id, "my-svc");
+        assert_eq!(ctx.auth_method, crate::AuthMethod::ServiceToken);
+        assert!(!ctx.is_root());
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_and_revoked_identically() {
+        let s = store();
+        let backend = ServiceTokenBackend::new(s.clone());
+
+        // Unknown token
+        let err_unknown = backend
+            .validate("egst_0000.deadbeef")
+            .await
+            .expect_err("should reject unknown token");
+        assert!(
+            err_unknown
+                .to_string()
+                .to_lowercase()
+                .contains("invalid credentials"),
+            "expected 'invalid credentials', got: {err_unknown}"
+        );
+
+        // Revoked token
+        let (token_id, raw_token) = s.create("svc").await.expect("create failed");
+        s.revoke(&token_id).await.expect("revoke failed");
+        let err_revoked = backend
+            .validate(&raw_token)
+            .await
+            .expect_err("should reject revoked token");
+        assert!(
+            err_revoked
+                .to_string()
+                .to_lowercase()
+                .contains("invalid credentials"),
+            "expected 'invalid credentials', got: {err_revoked}"
+        );
+
+        // Both map to the same variant
+        assert_eq!(
+            std::mem::discriminant(&err_unknown),
+            std::mem::discriminant(&err_revoked)
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_secret() {
+        let s = store();
+        let backend = ServiceTokenBackend::new(s.clone());
+        let (token_id, _) = s.create("svc").await.expect("create failed");
+        let forged = format!("egst_{token_id}.wrongsecret");
+        let err = backend
+            .validate(&forged)
+            .await
+            .expect_err("should reject wrong secret");
+        assert!(err
+            .to_string()
+            .to_lowercase()
+            .contains("invalid credentials"));
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_token() {
+        let s = store();
+        let backend = ServiceTokenBackend::new(s);
+        let err = backend
+            .validate("not-a-token")
+            .await
+            .expect_err("should reject malformed token");
+        assert!(err
+            .to_string()
+            .to_lowercase()
+            .contains("invalid credentials"));
     }
 }

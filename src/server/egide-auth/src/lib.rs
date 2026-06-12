@@ -40,3 +40,4 @@ pub use context::{AuthContext, AuthMethod};
 pub use error::AuthError;
 pub use nubster_identity::{NubsterIdentityBackend, NubsterIdentityConfig};
 pub use root_token::{RootTokenBackend, ROOT_TOKEN_HASH_KEY};
+pub use service_token::{ServiceTokenBackend, ServiceTokenRecord, ServiceTokenStore};

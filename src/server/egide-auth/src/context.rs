@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn service_token_method_serializes_snake_case() {
-        let json = serde_json::to_string(&AuthMethod::ServiceToken).unwrap();
+        let json = serde_json::to_string(&AuthMethod::ServiceToken).expect("serialization failed");
         assert_eq!(json, "\"service_token\"");
     }
 
