@@ -47,9 +47,220 @@ pub fn hash_secret(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
 }
 
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use egide_storage::StorageBackend;
+use rand::RngCore;
+
+use crate::AuthError;
+
+/// Stores and manages native service tokens via the raw storage backend.
+#[derive(Clone)]
+pub struct ServiceTokenStore {
+    storage: Arc<dyn StorageBackend>,
+}
+
+impl ServiceTokenStore {
+    /// Creates a new store over the given storage backend.
+    pub fn new(storage: Arc<dyn StorageBackend>) -> Self {
+        Self { storage }
+    }
+
+    fn storage_key(token_id: &str) -> String {
+        format!("{SERVICE_TOKEN_STORAGE_PREFIX}{token_id}")
+    }
+
+    /// Creates a new service token for `service_name`.
+    pub async fn create(&self, service_name: &str) -> Result<(String, String), AuthError> {
+        let mut id_bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut id_bytes);
+        let token_id = hex::encode(id_bytes);
+
+        let mut secret_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut secret_bytes);
+        let secret = hex::encode(secret_bytes);
+
+        let record = ServiceTokenRecord {
+            token_id: token_id.clone(),
+            secret_hash: hash_secret(&secret),
+            service_name: service_name.to_string(),
+            created_at: now_unix(),
+            revoked_at: None,
+        };
+        self.write(&record).await?;
+        Ok((token_id.clone(), format_token(&token_id, &secret)))
+    }
+
+    /// Looks up a record by token identifier.
+    pub async fn lookup(&self, token_id: &str) -> Result<Option<ServiceTokenRecord>, AuthError> {
+        match self
+            .storage
+            .get(&Self::storage_key(token_id))
+            .await
+            .map_err(|e| AuthError::Storage(e.to_string()))?
+        {
+            Some(bytes) => {
+                let record = serde_json::from_slice(&bytes)
+                    .map_err(|e| AuthError::Storage(e.to_string()))?;
+                Ok(Some(record))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Lists all service token records.
+    pub async fn list(&self) -> Result<Vec<ServiceTokenRecord>, AuthError> {
+        let keys = self
+            .storage
+            .list(SERVICE_TOKEN_STORAGE_PREFIX)
+            .await
+            .map_err(|e| AuthError::Storage(e.to_string()))?;
+        let mut records = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(bytes) = self
+                .storage
+                .get(&key)
+                .await
+                .map_err(|e| AuthError::Storage(e.to_string()))?
+            {
+                records.push(
+                    serde_json::from_slice(&bytes)
+                        .map_err(|e| AuthError::Storage(e.to_string()))?,
+                );
+            }
+        }
+        Ok(records)
+    }
+
+    /// Revokes a token. Returns `true` if the token existed.
+    pub async fn revoke(&self, token_id: &str) -> Result<bool, AuthError> {
+        match self.lookup(token_id).await? {
+            Some(mut record) => {
+                if record.revoked_at.is_none() {
+                    record.revoked_at = Some(now_unix());
+                    self.write(&record).await?;
+                }
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn write(&self, record: &ServiceTokenRecord) -> Result<(), AuthError> {
+        let value = serde_json::to_vec(record).map_err(|e| AuthError::Storage(e.to_string()))?;
+        self.storage
+            .put(&Self::storage_key(&record.token_id), &value)
+            .await
+            .map_err(|e| AuthError::Storage(e.to_string()))
+    }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use egide_storage::{StorageBackend, StorageError};
+    use tokio::sync::Mutex;
+
+    struct MemoryStorage {
+        data: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    impl MemoryStorage {
+        fn new() -> Self {
+            Self {
+                data: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl StorageBackend for MemoryStorage {
+        async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+            Ok(self.data.lock().await.get(key).cloned())
+        }
+
+        async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+            self.data.lock().await.insert(key.to_string(), value.to_vec());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            self.data.lock().await.remove(key);
+            Ok(())
+        }
+
+        async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+            Ok(self
+                .data
+                .lock()
+                .await
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn store() -> ServiceTokenStore {
+        ServiceTokenStore::new(Arc::new(MemoryStorage::new()))
+    }
+
+    #[tokio::test]
+    async fn create_then_lookup_roundtrip() {
+        let s = store();
+        let (token_id, raw_token) = s.create("my-service").await.unwrap();
+        assert!(raw_token.starts_with("egst_"));
+        let record = s.lookup(&token_id).await.unwrap().expect("record must exist");
+        assert_eq!(record.service_name, "my-service");
+        assert_eq!(record.token_id, token_id);
+        assert!(record.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn lookup_unknown_returns_none() {
+        let s = store();
+        let result = s.lookup("nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_returns_created_records() {
+        let s = store();
+        s.create("svc-a").await.unwrap();
+        s.create("svc-b").await.unwrap();
+        let records = s.list().await.unwrap();
+        assert_eq!(records.len(), 2);
+        let names: Vec<&str> = records.iter().map(|r| r.service_name.as_str()).collect();
+        assert!(names.contains(&"svc-a"));
+        assert!(names.contains(&"svc-b"));
+    }
+
+    #[tokio::test]
+    async fn revoke_marks_record_and_reports_existence() {
+        let s = store();
+        let (token_id, _) = s.create("svc").await.unwrap();
+
+        let existed = s.revoke(&token_id).await.unwrap();
+        assert!(existed);
+
+        let record = s.lookup(&token_id).await.unwrap().expect("record must exist after revoke");
+        assert!(record.revoked_at.is_some());
+
+        let not_found = s.revoke("unknown-id").await.unwrap();
+        assert!(!not_found);
+    }
 
     #[test]
     fn parses_a_well_formed_token() {
