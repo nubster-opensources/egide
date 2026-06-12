@@ -12,6 +12,8 @@ pub enum AuthMethod {
     Local,
     /// Root token (dev mode / legacy).
     RootToken,
+    /// Native service token issued by Egide (machine-to-machine).
+    ServiceToken,
 }
 
 /// Authenticated user context.
@@ -51,5 +53,28 @@ impl AuthContext {
     /// Checks if this is a root context.
     pub fn is_root(&self) -> bool {
         self.auth_method == AuthMethod::RootToken && self.account_id == "root"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_token_method_serializes_snake_case() {
+        let json = serde_json::to_string(&AuthMethod::ServiceToken).unwrap();
+        assert_eq!(json, "\"service_token\"");
+    }
+
+    #[test]
+    fn service_token_context_is_not_root() {
+        let ctx = AuthContext {
+            account_id: "identity".to_string(),
+            email: None,
+            display_name: None,
+            auth_method: AuthMethod::ServiceToken,
+            expires_at: None,
+        };
+        assert!(!ctx.is_root());
     }
 }
