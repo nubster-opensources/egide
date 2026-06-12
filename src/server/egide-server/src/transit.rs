@@ -9,6 +9,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 
 use egide_auth::AuthContext;
@@ -110,6 +111,39 @@ pub struct RotateResponse {
     version: u32,
 }
 
+/// Body carrying an opaque transit ciphertext (`egide:v{n}:...`).
+#[derive(Deserialize)]
+pub struct CiphertextRequest {
+    /// Ciphertext produced by a previous encrypt/datakey/rewrap call.
+    pub ciphertext: String,
+}
+
+/// Body carrying base64-encoded plaintext.
+#[derive(Deserialize)]
+pub struct PlaintextRequest {
+    /// Base64-encoded plaintext.
+    pub plaintext: String,
+}
+
+/// Response carrying an opaque ciphertext.
+#[derive(Serialize)]
+pub struct CiphertextResponse {
+    ciphertext: String,
+}
+
+/// Response carrying base64-encoded plaintext.
+#[derive(Serialize)]
+pub struct PlaintextResponse {
+    plaintext: String,
+}
+
+/// Response for `POST /v1/transit/datakey/{name}`.
+#[derive(Serialize)]
+pub struct DataKeyResponse {
+    plaintext: String,
+    ciphertext: String,
+}
+
 // ============================================================================
 // Handlers - key management
 // ============================================================================
@@ -205,4 +239,79 @@ pub async fn rotate_key_handler(
     let engine = transit.as_ref().ok_or_else(sealed)?;
     let version = engine.rotate_key(&name).await.map_err(transit_problem)?;
     Ok(Json(RotateResponse { version }))
+}
+
+// ============================================================================
+// Handlers - data operations
+// ============================================================================
+
+/// Handles `POST /v1/transit/encrypt/{name}`.
+pub async fn encrypt_handler(
+    Authenticated(_ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<PlaintextRequest>,
+) -> Result<Json<CiphertextResponse>, Problem> {
+    let plaintext = BASE64
+        .decode(req.plaintext.as_bytes())
+        .map_err(|_| Problem::new(StatusCode::BAD_REQUEST, "plaintext must be valid base64"))?;
+    let transit = state.transit.read().await;
+    let engine = transit.as_ref().ok_or_else(sealed)?;
+    let ciphertext = engine
+        .encrypt(&name, &plaintext)
+        .await
+        .map_err(transit_problem)?;
+    Ok(Json(CiphertextResponse { ciphertext }))
+}
+
+/// Handles `POST /v1/transit/decrypt/{name}`.
+pub async fn decrypt_handler(
+    Authenticated(_ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<CiphertextRequest>,
+) -> Result<Json<PlaintextResponse>, Problem> {
+    let transit = state.transit.read().await;
+    let engine = transit.as_ref().ok_or_else(sealed)?;
+    let plaintext = engine
+        .decrypt(&name, &req.ciphertext)
+        .await
+        .map_err(transit_problem)?;
+    Ok(Json(PlaintextResponse {
+        plaintext: BASE64.encode(&plaintext),
+    }))
+}
+
+/// Handles `POST /v1/transit/datakey/{name}`.
+pub async fn datakey_handler(
+    Authenticated(_ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<DataKeyResponse>, Problem> {
+    let transit = state.transit.read().await;
+    let engine = transit.as_ref().ok_or_else(sealed)?;
+    let datakey = engine
+        .generate_datakey(&name)
+        .await
+        .map_err(transit_problem)?;
+    Ok(Json(DataKeyResponse {
+        plaintext: BASE64.encode(&datakey.plaintext),
+        ciphertext: datakey.ciphertext,
+    }))
+}
+
+/// Handles `POST /v1/transit/rewrap/{name}`.
+pub async fn rewrap_handler(
+    Authenticated(_ctx): Authenticated,
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<CiphertextRequest>,
+) -> Result<Json<CiphertextResponse>, Problem> {
+    let transit = state.transit.read().await;
+    let engine = transit.as_ref().ok_or_else(sealed)?;
+    let ciphertext = engine
+        .rewrap(&name, &req.ciphertext)
+        .await
+        .map_err(transit_problem)?;
+    Ok(Json(CiphertextResponse { ciphertext }))
 }

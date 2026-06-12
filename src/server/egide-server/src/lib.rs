@@ -838,6 +838,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/v1/transit/keys/{name}/rotate",
             post(transit::rotate_key_handler),
         )
+        .route("/v1/transit/encrypt/{name}", post(transit::encrypt_handler))
+        .route("/v1/transit/decrypt/{name}", post(transit::decrypt_handler))
+        .route("/v1/transit/datakey/{name}", post(transit::datakey_handler))
+        .route("/v1/transit/rewrap/{name}", post(transit::rewrap_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

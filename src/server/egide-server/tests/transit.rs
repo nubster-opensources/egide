@@ -1,5 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use egide_auth::{RootTokenBackend, ServiceTokenBackend, ServiceTokenStore};
 use egide_seal::{SealManager, ShamirConfig};
 use egide_server::{build_router, AppState, AuthService};
@@ -312,4 +313,195 @@ async fn management_route_when_sealed_is_503() {
         .await
         .expect("oneshot");
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn encrypt_decrypt_roundtrip_with_service_token() {
+    let (_tmp, app, root) = test_app().await;
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/keys",
+            Some(&root),
+            r#"{"name":"k"}"#,
+        ))
+        .await
+        .expect("oneshot");
+    let token = service_token(&app, &root).await;
+
+    let plaintext = BASE64.encode(b"hello world");
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/encrypt/k",
+            Some(&token),
+            &format!(r#"{{"plaintext":"{plaintext}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::OK);
+    let ciphertext = read_json(res).await["ciphertext"]
+        .as_str()
+        .expect("ciphertext")
+        .to_string();
+    assert!(ciphertext.starts_with("egide:v1:"));
+
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/v1/transit/decrypt/k",
+            Some(&token),
+            &format!(r#"{{"ciphertext":"{ciphertext}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(read_json(res).await["plaintext"], plaintext);
+}
+
+#[tokio::test]
+async fn encrypt_invalid_base64_is_400() {
+    let (_tmp, app, root) = test_app().await;
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/keys",
+            Some(&root),
+            r#"{"name":"k"}"#,
+        ))
+        .await
+        .expect("oneshot");
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/v1/transit/encrypt/k",
+            Some(&root),
+            r#"{"plaintext":"not valid base64!!!"}"#,
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn encrypt_unknown_key_is_404() {
+    let (_tmp, app, root) = test_app().await;
+    let plaintext = BASE64.encode(b"x");
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/v1/transit/encrypt/nope",
+            Some(&root),
+            &format!(r#"{{"plaintext":"{plaintext}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn datakey_plaintext_unwraps_ciphertext() {
+    let (_tmp, app, root) = test_app().await;
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/keys",
+            Some(&root),
+            r#"{"name":"k"}"#,
+        ))
+        .await
+        .expect("oneshot");
+    let token = service_token(&app, &root).await;
+
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/v1/transit/datakey/k", Some(&token), ""))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = read_json(res).await;
+    let plaintext = body["plaintext"].as_str().expect("plaintext").to_string();
+    let ciphertext = body["ciphertext"].as_str().expect("ciphertext").to_string();
+
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/v1/transit/decrypt/k",
+            Some(&token),
+            &format!(r#"{{"ciphertext":"{ciphertext}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(read_json(res).await["plaintext"], plaintext);
+}
+
+#[tokio::test]
+async fn rewrap_upgrades_ciphertext_version() {
+    let (_tmp, app, root) = test_app().await;
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/keys",
+            Some(&root),
+            r#"{"name":"k"}"#,
+        ))
+        .await
+        .expect("oneshot");
+    let token = service_token(&app, &root).await;
+
+    let plaintext = BASE64.encode(b"data");
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/encrypt/k",
+            Some(&token),
+            &format!(r#"{{"plaintext":"{plaintext}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    let ct_v1 = read_json(res).await["ciphertext"]
+        .as_str()
+        .expect("ciphertext")
+        .to_string();
+    assert!(ct_v1.starts_with("egide:v1:"));
+
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/keys/k/rotate",
+            Some(&root),
+            "",
+        ))
+        .await
+        .expect("oneshot");
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/transit/rewrap/k",
+            Some(&token),
+            &format!(r#"{{"ciphertext":"{ct_v1}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::OK);
+    let ct_v2 = read_json(res).await["ciphertext"]
+        .as_str()
+        .expect("ciphertext")
+        .to_string();
+    assert!(ct_v2.starts_with("egide:v2:"));
+
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/v1/transit/decrypt/k",
+            Some(&token),
+            &format!(r#"{{"ciphertext":"{ct_v2}"}}"#),
+        ))
+        .await
+        .expect("oneshot");
+    assert_eq!(read_json(res).await["plaintext"], plaintext);
 }
