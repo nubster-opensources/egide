@@ -8,6 +8,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lib]
+name = "egide_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "egide-server"
 path = "src/main.rs"
