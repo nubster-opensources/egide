@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
@@ -19,8 +19,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use async_trait::async_trait;
 use egide_auth::{
-    AuthBackend, AuthContext, AuthError, NubsterIdentityBackend, NubsterIdentityConfig,
-    RootTokenBackend,
+    AuthBackend, AuthContext, AuthError, RootTokenBackend, ServiceTokenBackend, ServiceTokenStore,
 };
 use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
 use egide_secrets::SecretsEngine;
@@ -126,16 +125,6 @@ impl FromRequestParts<Arc<AppState>> for Authenticated {
 // CLI Arguments
 // ============================================================================
 
-/// Authentication backend type.
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-pub enum AuthBackendType {
-    /// Nubster.Identity JWT validation (for Cloud and Workspace OnPrem).
-    NubsterIdentity,
-    /// Root token validation (for dev mode and Standalone OnPrem).
-    #[default]
-    RootToken,
-}
-
 /// Command-line arguments for the Egide server.
 #[derive(Parser)]
 #[command(name = "egide-server")]
@@ -153,31 +142,6 @@ pub struct Cli {
     /// Server bind address.
     #[arg(long, default_value = "0.0.0.0:8200", env = "EGIDE_BIND_ADDRESS")]
     pub bind: String,
-
-    /// Authentication backend to use.
-    #[arg(
-        long,
-        value_enum,
-        default_value = "root-token",
-        env = "EGIDE_AUTH_BACKEND"
-    )]
-    pub auth_backend: AuthBackendType,
-
-    /// Nubster.Identity JWT secret (required for nubster-identity backend).
-    #[arg(long, env = "EGIDE_IDENTITY_JWT_SECRET")]
-    pub identity_jwt_secret: Option<String>,
-
-    /// Nubster.Identity issuer URL.
-    #[arg(
-        long,
-        default_value = "https://api.nubster.com",
-        env = "EGIDE_IDENTITY_ISSUER"
-    )]
-    pub identity_issuer: String,
-
-    /// Nubster.Identity audience.
-    #[arg(long, default_value = "egide", env = "EGIDE_IDENTITY_AUDIENCE")]
-    pub identity_audience: String,
 }
 
 // ============================================================================
@@ -198,6 +162,8 @@ pub struct AppState {
     pub start_time: Instant,
     /// Server version.
     pub version: &'static str,
+    /// Native service token store (shared with the auth backend).
+    pub service_tokens: ServiceTokenStore,
 }
 
 impl AppState {
@@ -683,40 +649,12 @@ fn base64_encode(data: &[u8]) -> String {
     STANDARD.encode(data)
 }
 
-/// Creates the auth service based on CLI configuration.
-fn create_auth_service(cli: &Cli, seal_manager: &SealManager) -> anyhow::Result<AuthService> {
-    let mut backends: Vec<Box<dyn AuthBackend>> = Vec::new();
-
-    match cli.auth_backend {
-        AuthBackendType::NubsterIdentity => {
-            let jwt_secret = cli.identity_jwt_secret.clone().ok_or_else(|| {
-                anyhow::anyhow!("--identity-jwt-secret is required for nubster-identity backend")
-            })?;
-
-            let config = NubsterIdentityConfig {
-                jwt_secret,
-                issuer: cli.identity_issuer.clone(),
-                audience: cli.identity_audience.clone(),
-            };
-
-            tracing::info!(
-                issuer = %config.issuer,
-                audience = %config.audience,
-                "Auth backend: Nubster.Identity"
-            );
-
-            backends.push(Box::new(NubsterIdentityBackend::new(config)));
-        },
-        AuthBackendType::RootToken => {
-            tracing::info!("Auth backend: Root Token");
-
-            // Pass the storage directly - RootTokenBackend reads async in validate()
-            let storage = Arc::new(seal_manager.storage().clone());
-            backends.push(Box::new(RootTokenBackend::new(storage)));
-        },
-    }
-
-    Ok(AuthService::new(backends))
+/// Creates the auth service composing root-token and service-token backends.
+fn create_auth_service(seal_manager: &SealManager, service_store: ServiceTokenStore) -> AuthService {
+    let root = RootTokenBackend::new(Arc::new(seal_manager.storage().clone()));
+    let service = ServiceTokenBackend::new(service_store);
+    tracing::info!("Auth backends: root-token, service-token");
+    AuthService::new(vec![Box::new(root), Box::new(service)])
 }
 
 // ============================================================================
@@ -775,8 +713,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         tracing::info!("Dev mode: auto-unseal enabled");
     }
 
-    // Create auth service
-    let auth_service = create_auth_service(&cli, &seal_manager)?;
+    // Build shared service token store
+    let service_store = ServiceTokenStore::new(
+        Arc::new(seal_manager.storage().clone()) as Arc<dyn egide_storage::StorageBackend>,
+    );
+    let auth_service = create_auth_service(&seal_manager, service_store.clone());
 
     let state = Arc::new(AppState {
         auth: auth_service,
@@ -785,6 +726,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         data_dir: cli.data_dir.clone(),
         start_time: Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
+        service_tokens: service_store,
     });
 
     // If already unsealed (dev mode), initialize secrets engine
