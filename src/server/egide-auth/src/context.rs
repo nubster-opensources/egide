@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMethod {
-    /// Nubster.Identity JWT token.
-    NubsterIdentity,
     /// Local user (standalone on-premise).
     Local,
     /// Root token (dev mode / legacy).
