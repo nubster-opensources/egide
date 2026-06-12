@@ -3,6 +3,8 @@
 pub mod problem;
 pub use problem::Problem;
 
+pub mod transit;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -823,6 +825,18 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/auth/service-tokens/{token_id}",
             delete(service_token_revoke_handler),
+        )
+        .route(
+            "/v1/transit/keys",
+            post(transit::create_key_handler).get(transit::list_keys_handler),
+        )
+        .route(
+            "/v1/transit/keys/{name}",
+            get(transit::get_key_handler).delete(transit::delete_key_handler),
+        )
+        .route(
+            "/v1/transit/keys/{name}/rotate",
+            post(transit::rotate_key_handler),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
