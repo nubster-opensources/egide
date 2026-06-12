@@ -1,5 +1,8 @@
 //! Egide Server library - router, state, handlers.
 
+pub mod problem;
+pub use problem::Problem;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -650,7 +653,10 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 /// Creates the auth service composing root-token and service-token backends.
-fn create_auth_service(seal_manager: &SealManager, service_store: ServiceTokenStore) -> AuthService {
+fn create_auth_service(
+    seal_manager: &SealManager,
+    service_store: ServiceTokenStore,
+) -> AuthService {
     let root = RootTokenBackend::new(Arc::new(seal_manager.storage().clone()));
     let service = ServiceTokenBackend::new(service_store);
     tracing::info!("Auth backends: root-token, service-token");
@@ -715,7 +721,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     // Build shared service token store
     let service_store = ServiceTokenStore::new(
-        Arc::new(seal_manager.storage().clone()) as Arc<dyn egide_storage::StorageBackend>,
+        Arc::new(seal_manager.storage().clone()) as Arc<dyn egide_storage::StorageBackend>
     );
     let auth_service = create_auth_service(&seal_manager, service_store.clone());
 
