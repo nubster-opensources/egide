@@ -164,10 +164,9 @@ pub struct ErrorResponse {
 #[derive(Deserialize)]
 pub struct SecretPutRequest {
     data: std::collections::HashMap<String, String>,
-    /// Check-and-set version guard. Accepted by the API for forward compatibility;
-    /// not yet enforced by the v0.1 service layer.
+    /// Check-and-set version guard: only write if the current version equals this value.
+    /// Omit (or pass `null`) for an unconditional write.
     #[serde(default)]
-    #[allow(dead_code)]
     cas: Option<u32>,
 }
 
@@ -396,23 +395,24 @@ pub async fn secrets_put_handler(
 ) -> Result<Json<SecretWriteResponse>, (StatusCode, Json<ErrorResponse>)> {
     tracing::debug!(account = %ctx.account_id, path = %path, "secrets.put");
 
-    // CAS is not yet exposed by the service layer; fall back to a direct put.
-    // The service layer always performs an unconditional write for v0.1.
-    let version = state.secret_put(&path, req.data).await.map_err(|e| {
-        use egide_api::ServiceError as E;
-        let status = match &e {
-            E::Conflict => StatusCode::CONFLICT,
-            E::BadRequest(_) => StatusCode::BAD_REQUEST,
-            E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        (
-            status,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let version = state
+        .secret_put(&path, req.data, req.cas)
+        .await
+        .map_err(|e| {
+            use egide_api::ServiceError as E;
+            let status = match &e {
+                E::Conflict => StatusCode::CONFLICT,
+                E::BadRequest(_) => StatusCode::BAD_REQUEST,
+                E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(SecretWriteResponse { version }))
 }
