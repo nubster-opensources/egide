@@ -450,6 +450,7 @@ dependencies = [
  "egide-storage",
  "egide-storage-sqlite",
  "egide-transit",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
