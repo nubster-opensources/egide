@@ -16,6 +16,11 @@ pub struct SecretView {
     pub data: HashMap<String, String>,
     /// Version number of this secret.
     pub version: u32,
+    /// Creation timestamp of this version (Unix seconds).
+    ///
+    /// Preserved from the storage layer so REST adapters can reproduce the
+    /// `metadata.created_at` field with byte-identical semantics.
+    pub created_at: u64,
 }
 
 impl ServiceContext {
@@ -30,6 +35,7 @@ impl ServiceContext {
             Ok(s) => Ok(SecretView {
                 data: s.data,
                 version: s.version,
+                created_at: s.created_at,
             }),
             Err(e) if is_not_found(&e) => Err(ServiceError::NotFound),
             Err(e) => Err(ServiceError::Internal(e.to_string())),

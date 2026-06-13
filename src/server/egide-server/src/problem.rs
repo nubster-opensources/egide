@@ -39,6 +39,22 @@ impl IntoResponse for Problem {
     }
 }
 
+impl From<egide_api::ServiceError> for Problem {
+    fn from(e: egide_api::ServiceError) -> Self {
+        use axum::http::StatusCode as S;
+        use egide_api::ServiceError as E;
+        match e {
+            E::NotFound => Problem::new(S::NOT_FOUND, "not found"),
+            E::Conflict => Problem::new(S::CONFLICT, "already exists"),
+            E::BadRequest(m) => Problem::new(S::BAD_REQUEST, m),
+            E::Forbidden(m) => Problem::new(S::FORBIDDEN, m),
+            E::Sealed => Problem::new(S::SERVICE_UNAVAILABLE, "Vault is sealed"),
+            E::DecryptionFailed => Problem::new(S::BAD_REQUEST, "decryption failed"),
+            E::Internal(m) => Problem::new(S::INTERNAL_SERVER_ERROR, m),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -23,6 +23,12 @@ pub struct InitView {
     pub root_token: String,
     /// Shamir key shares in hex encoding, one per holder.
     pub shares_hex: Vec<String>,
+    /// Shamir key shares in standard base64 encoding (raw share bytes).
+    ///
+    /// Computed from the same source as `shares_hex`: the raw `Share::data` bytes.
+    /// Provided so REST adapters can reproduce the `keys_base64` field without
+    /// re-decoding hex, preserving byte-identical responses.
+    pub shares_base64: Vec<String>,
 }
 
 /// Progress snapshot returned after each unseal share submission.
@@ -72,9 +78,11 @@ impl ServiceContext {
             .initialize(config)
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
         Ok(InitView {
             root_token: res.root_token,
             shares_hex: res.shares.iter().map(|s| s.to_hex()).collect(),
+            shares_base64: res.shares.iter().map(|s| BASE64.encode(&s.data)).collect(),
         })
     }
 
