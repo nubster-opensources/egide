@@ -9,6 +9,8 @@ pub use context::ServiceContext;
 pub mod error;
 pub use error::ServiceError;
 
+pub mod secrets;
+
 pub mod sys;
 
 #[cfg(test)]
