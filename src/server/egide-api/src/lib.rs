@@ -13,5 +13,7 @@ pub mod secrets;
 
 pub mod sys;
 
+pub mod transit;
+
 #[cfg(test)]
 mod test_support;
