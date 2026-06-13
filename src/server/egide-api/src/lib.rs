@@ -15,5 +15,7 @@ pub mod sys;
 
 pub mod transit;
 
+pub mod service_tokens;
+
 #[cfg(test)]
 mod test_support;
