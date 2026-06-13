@@ -22,61 +22,13 @@ use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use async_trait::async_trait;
+pub use egide_auth::AuthService;
 use egide_auth::{
-    AuthBackend, AuthContext, AuthError, RootTokenBackend, ServiceTokenBackend, ServiceTokenStore,
+    AuthContext, AuthError, RootTokenBackend, ServiceTokenBackend, ServiceTokenStore,
 };
 use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
 use egide_secrets::SecretsEngine;
 use egide_transit::TransitEngine;
-
-// ============================================================================
-// Authentication Service
-// ============================================================================
-
-/// Combined authentication service that tries multiple backends.
-pub struct AuthService {
-    backends: Vec<Box<dyn AuthBackend>>,
-}
-
-impl AuthService {
-    /// Creates a new auth service with the given backends.
-    pub fn new(backends: Vec<Box<dyn AuthBackend>>) -> Self {
-        Self { backends }
-    }
-
-    /// Validates a token against all configured backends.
-    pub async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
-        for backend in &self.backends {
-            match backend.validate(token).await {
-                Ok(ctx) => {
-                    tracing::debug!(backend = backend.name(), account = %ctx.account_id, "Auth success");
-                    return Ok(ctx);
-                },
-                Err(AuthError::TokenExpired) => {
-                    // Token expired is a definitive error, don't try other backends
-                    return Err(AuthError::TokenExpired);
-                },
-                Err(_) => {
-                    // Try next backend
-                    continue;
-                },
-            }
-        }
-        Err(AuthError::InvalidCredentials)
-    }
-}
-
-#[async_trait]
-impl AuthBackend for AuthService {
-    async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
-        AuthService::validate(self, token).await
-    }
-
-    fn name(&self) -> &'static str {
-        "auth-service"
-    }
-}
 
 /// Authenticated request extractor.
 ///

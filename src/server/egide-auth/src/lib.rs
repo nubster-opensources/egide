@@ -26,6 +26,7 @@ pub mod backend;
 pub mod context;
 pub mod error;
 pub mod root_token;
+pub mod service;
 pub mod service_token;
 
 // Re-exports
@@ -33,4 +34,5 @@ pub use backend::AuthBackend;
 pub use context::{AuthContext, AuthMethod};
 pub use error::AuthError;
 pub use root_token::{RootTokenBackend, ROOT_TOKEN_HASH_KEY};
+pub use service::AuthService;
 pub use service_token::{ServiceTokenBackend, ServiceTokenRecord, ServiceTokenStore};

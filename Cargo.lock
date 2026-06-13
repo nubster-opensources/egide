@@ -465,6 +465,7 @@ dependencies = [
  "subtle",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -576,6 +577,7 @@ dependencies = [
  "egide-secrets",
  "egide-storage",
  "egide-storage-sqlite",
+ "egide-transit",
  "serde",
  "serde_json",
  "tempfile",
