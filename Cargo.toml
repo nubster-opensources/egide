@@ -55,7 +55,7 @@ blahaj = "0.6"
 argon2 = "0.5"
 
 # Database
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
