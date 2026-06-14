@@ -30,7 +30,7 @@ members = [
 [workspace.package]
 version = "0.1.0-alpha"
 edition = "2021"
-rust-version = "1.79"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 authors = ["Nubster <contact@nubster.com>"]
 repository = "https://github.com/nubster-opensources/egide"
@@ -78,6 +78,13 @@ axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# gRPC
+tonic = "0.14.6"
+prost = "0.14"
+tonic-health = "0.14.6"
+tonic-reflection = "0.14.6"
+tonic-build = "0.14.6"
 
 [profile.release]
 lto = true
