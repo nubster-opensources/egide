@@ -16,6 +16,9 @@ egide-storage = { path = "../../storage/egide-storage" }
 tokio = { workspace = true }
 async-trait = "0.1"
 
+# Observability
+tracing = { workspace = true }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

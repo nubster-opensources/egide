@@ -22,61 +22,12 @@ use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use async_trait::async_trait;
+pub use egide_api::ServiceContext as AppState;
+pub use egide_auth::AuthService;
 use egide_auth::{
-    AuthBackend, AuthContext, AuthError, RootTokenBackend, ServiceTokenBackend, ServiceTokenStore,
+    AuthContext, AuthError, RootTokenBackend, ServiceTokenBackend, ServiceTokenStore,
 };
-use egide_seal::{SealManager, SealStatus, ShamirConfig, Share};
-use egide_secrets::SecretsEngine;
-use egide_transit::TransitEngine;
-
-// ============================================================================
-// Authentication Service
-// ============================================================================
-
-/// Combined authentication service that tries multiple backends.
-pub struct AuthService {
-    backends: Vec<Box<dyn AuthBackend>>,
-}
-
-impl AuthService {
-    /// Creates a new auth service with the given backends.
-    pub fn new(backends: Vec<Box<dyn AuthBackend>>) -> Self {
-        Self { backends }
-    }
-
-    /// Validates a token against all configured backends.
-    pub async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
-        for backend in &self.backends {
-            match backend.validate(token).await {
-                Ok(ctx) => {
-                    tracing::debug!(backend = backend.name(), account = %ctx.account_id, "Auth success");
-                    return Ok(ctx);
-                },
-                Err(AuthError::TokenExpired) => {
-                    // Token expired is a definitive error, don't try other backends
-                    return Err(AuthError::TokenExpired);
-                },
-                Err(_) => {
-                    // Try next backend
-                    continue;
-                },
-            }
-        }
-        Err(AuthError::InvalidCredentials)
-    }
-}
-
-#[async_trait]
-impl AuthBackend for AuthService {
-    async fn validate(&self, token: &str) -> Result<AuthContext, AuthError> {
-        AuthService::validate(self, token).await
-    }
-
-    fn name(&self) -> &'static str {
-        "auth-service"
-    }
-}
+use egide_seal::SealManager;
 
 /// Authenticated request extractor.
 ///
@@ -133,91 +84,6 @@ pub struct Cli {
     /// Server bind address.
     #[arg(long, default_value = "0.0.0.0:8200", env = "EGIDE_BIND_ADDRESS")]
     pub bind: String,
-}
-
-// ============================================================================
-// Application State
-// ============================================================================
-
-/// Shared application state.
-pub struct AppState {
-    /// Authentication service.
-    pub auth: AuthService,
-    /// Seal manager (handles init/seal/unseal).
-    pub seal: RwLock<SealManager>,
-    /// Secrets engine (available only when unsealed).
-    pub secrets: RwLock<Option<SecretsEngine>>,
-    /// Transit engine (available only when unsealed).
-    pub transit: RwLock<Option<TransitEngine>>,
-    /// Data directory path.
-    pub data_dir: PathBuf,
-    /// Server start time.
-    pub start_time: Instant,
-    /// Server version.
-    pub version: &'static str,
-    /// Native service token store (shared with the auth backend).
-    pub service_tokens: ServiceTokenStore,
-}
-
-impl AppState {
-    /// Creates the secrets engine if unsealed.
-    pub async fn ensure_secrets_engine(&self) -> Result<(), String> {
-        let seal = self.seal.read().await;
-        if seal.status() != SealStatus::Unsealed {
-            return Err("Vault is sealed".into());
-        }
-
-        let master_key = seal
-            .master_key()
-            .ok_or_else(|| "Master key not available".to_string())?;
-
-        let mut secrets = self.secrets.write().await;
-        if secrets.is_none() {
-            // Use "default" tenant for v0.1
-            let engine = SecretsEngine::new(&self.data_dir, "default", master_key.clone())
-                .await
-                .map_err(|e| e.to_string())?;
-            *secrets = Some(engine);
-            tracing::info!("Secrets engine initialized");
-        }
-        Ok(())
-    }
-
-    /// Clears the secrets engine (called on seal).
-    pub async fn clear_secrets_engine(&self) {
-        let mut secrets = self.secrets.write().await;
-        *secrets = None;
-        tracing::info!("Secrets engine cleared");
-    }
-
-    /// Creates the transit engine if unsealed.
-    pub async fn ensure_transit_engine(&self) -> Result<(), String> {
-        let seal = self.seal.read().await;
-        if seal.status() != SealStatus::Unsealed {
-            return Err("Vault is sealed".into());
-        }
-
-        let master_key = seal
-            .master_key()
-            .ok_or_else(|| "Master key not available".to_string())?;
-
-        let mut transit = self.transit.write().await;
-        if transit.is_none() {
-            let engine = TransitEngine::new(&self.data_dir, master_key.clone())
-                .await
-                .map_err(|e| e.to_string())?;
-            *transit = Some(engine);
-            tracing::info!("Transit engine initialized");
-        }
-        Ok(())
-    }
-
-    /// Clears the transit engine (called on seal).
-    pub async fn clear_transit_engine(&self) {
-        let mut transit = self.transit.write().await;
-        *transit = None;
-        tracing::info!("Transit engine cleared");
-    }
 }
 
 // ============================================================================
@@ -298,6 +164,8 @@ pub struct ErrorResponse {
 #[derive(Deserialize)]
 pub struct SecretPutRequest {
     data: std::collections::HashMap<String, String>,
+    /// Check-and-set version guard: only write if the current version equals this value.
+    /// Omit (or pass `null`) for an unconditional write.
     #[serde(default)]
     cas: Option<u32>,
 }
@@ -361,59 +229,56 @@ pub async fn root_handler() -> &'static str {
 
 /// Handles GET `/v1/sys/health`.
 pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let seal = state.seal.read().await;
-    let status = seal.status();
-
+    let sv = state.status().await;
     Json(HealthResponse {
         status: "ok",
-        version: state.version,
-        initialized: status != SealStatus::Uninitialized,
-        sealed: status != SealStatus::Unsealed,
+        version: sv.version,
+        initialized: sv.initialized,
+        sealed: sv.sealed,
         uptime_secs: state.start_time.elapsed().as_secs(),
     })
 }
 
 /// Handles GET `/v1/sys/status`.
 pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
-    let seal = state.seal.read().await;
-    let status = seal.status();
-
+    let sv = state.status().await;
     Json(StatusResponse {
-        version: state.version,
-        initialized: status != SealStatus::Uninitialized,
-        sealed: status != SealStatus::Unsealed,
+        version: sv.version,
+        initialized: sv.initialized,
+        sealed: sv.sealed,
     })
 }
 
 /// Handles POST `/v1/sys/init`.
+///
+/// Init is a bootstrap operation: no bearer token is required. The service layer
+/// enforces that init can only succeed when the vault is not yet initialized.
 pub async fn init_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InitRequest>,
 ) -> Result<Json<InitResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mut seal = state.seal.write().await;
-
-    if seal.status() != SealStatus::Uninitialized {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Vault is already initialized".into(),
-            }),
-        ));
-    }
-
-    let config = ShamirConfig {
-        shares: req.secret_shares,
-        threshold: req.secret_threshold,
-    };
-
-    let result = seal.initialize(config).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
+    // Bootstrap context: init is open to any caller (the shares are the credential).
+    let view = state
+        .init(
+            &AuthContext::root(),
+            req.secret_shares,
+            req.secret_threshold,
         )
-    })?;
+        .await
+        .map_err(|e| {
+            use egide_api::ServiceError as E;
+            let status = match &e {
+                E::BadRequest(_) => StatusCode::BAD_REQUEST,
+                E::Forbidden(_) => StatusCode::FORBIDDEN,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     tracing::info!(
         "Vault initialized with {} shares, threshold {}",
@@ -422,13 +287,9 @@ pub async fn init_handler(
     );
 
     Ok(Json(InitResponse {
-        root_token: result.root_token,
-        keys: result.shares.iter().map(|s| s.to_hex()).collect(),
-        keys_base64: result
-            .shares
-            .iter()
-            .map(|s| base64_encode(&s.data))
-            .collect(),
+        root_token: view.root_token,
+        keys: view.shares_hex,
+        keys_base64: view.shares_base64,
     }))
 }
 
@@ -437,72 +298,30 @@ pub async fn unseal_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UnsealRequest>,
 ) -> Result<Json<UnsealResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let share = Share::from_hex(&req.key).map_err(|e| {
+    let view = state.unseal(&req.key).await.map_err(|e| {
+        use egide_api::ServiceError as E;
+        let status = match &e {
+            E::BadRequest(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
         (
-            StatusCode::BAD_REQUEST,
+            status,
             Json(ErrorResponse {
-                error: format!("Invalid key format: {}", e),
+                error: e.to_string(),
             }),
         )
     })?;
 
-    let progress = {
-        let mut seal = state.seal.write().await;
-
-        if seal.status() == SealStatus::Uninitialized {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Vault is not initialized".into(),
-                }),
-            ));
-        }
-
-        if seal.status() == SealStatus::Unsealed {
-            return Ok(Json(UnsealResponse {
-                sealed: false,
-                threshold: 0,
-                progress: 0,
-            }));
-        }
-
-        seal.unseal(&share).await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?
-    };
-
-    // If unsealed, initialize secrets engine
-    if !progress.sealed {
-        state.ensure_secrets_engine().await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })?;
-        state.ensure_transit_engine().await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })?;
+    if !view.sealed {
         tracing::info!("Vault unsealed successfully");
     } else {
-        tracing::info!(
-            "Unseal progress: {}/{}",
-            progress.progress,
-            progress.threshold
-        );
+        tracing::info!("Unseal progress: {}/{}", view.progress, view.threshold);
     }
 
     Ok(Json(UnsealResponse {
-        sealed: progress.sealed,
-        threshold: progress.threshold,
-        progress: progress.progress,
+        sealed: view.sealed,
+        threshold: view.threshold,
+        progress: view.progress,
     }))
 }
 
@@ -511,35 +330,22 @@ pub async fn seal_handler(
     Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SealResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if !ctx.is_root() {
-        return Err((
-            StatusCode::FORBIDDEN,
+    state.seal(&ctx).await.map_err(|e| {
+        use egide_api::ServiceError as E;
+        let status = match &e {
+            E::Forbidden(_) => StatusCode::FORBIDDEN,
+            E::BadRequest(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            status,
             Json(ErrorResponse {
-                error: "seal requires root privileges".into(),
+                error: e.to_string(),
             }),
-        ));
-    }
+        )
+    })?;
 
-    {
-        let mut seal = state.seal.write().await;
-
-        if seal.status() != SealStatus::Unsealed {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Vault is not unsealed".into(),
-                }),
-            ));
-        }
-
-        seal.seal();
-    }
-
-    // Clear secrets engine
-    state.clear_secrets_engine().await;
-    state.clear_transit_engine().await;
     tracing::info!("Vault sealed");
-
     Ok(Json(SealResponse { sealed: true }))
 }
 
@@ -555,19 +361,11 @@ pub async fn secrets_get_handler(
 ) -> Result<Json<SecretResponse>, (StatusCode, Json<ErrorResponse>)> {
     tracing::debug!(account = %ctx.account_id, path = %path, "secrets.get");
 
-    let secrets = state.secrets.read().await;
-    let engine = secrets.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Vault is sealed".into(),
-            }),
-        )
-    })?;
-
-    let secret = engine.get(&path).await.map_err(|e| {
+    let view = state.secret_get(&path).await.map_err(|e| {
+        use egide_api::ServiceError as E;
         let status = match &e {
-            egide_secrets::SecretsError::NotFound(_) => StatusCode::NOT_FOUND,
+            E::NotFound => StatusCode::NOT_FOUND,
+            E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
@@ -579,10 +377,10 @@ pub async fn secrets_get_handler(
     })?;
 
     Ok(Json(SecretResponse {
-        data: secret.data,
+        data: view.data,
         metadata: SecretMetadataResponse {
-            version: secret.version,
-            created_at: secret.created_at,
+            version: view.version,
+            created_at: view.created_at,
             deleted: false,
         },
     }))
@@ -597,34 +395,24 @@ pub async fn secrets_put_handler(
 ) -> Result<Json<SecretWriteResponse>, (StatusCode, Json<ErrorResponse>)> {
     tracing::debug!(account = %ctx.account_id, path = %path, "secrets.put");
 
-    let secrets = state.secrets.read().await;
-    let engine = secrets.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Vault is sealed".into(),
-            }),
-        )
-    })?;
-
-    let options = egide_secrets::PutOptions {
-        cas: req.cas,
-        ..Default::default()
-    };
-
-    let version = engine.put(&path, req.data, options).await.map_err(|e| {
-        let status = match &e {
-            egide_secrets::SecretsError::VersionMismatch { .. } => StatusCode::CONFLICT,
-            egide_secrets::SecretsError::InvalidPath(_) => StatusCode::BAD_REQUEST,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        (
-            status,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let version = state
+        .secret_put(&path, req.data, req.cas)
+        .await
+        .map_err(|e| {
+            use egide_api::ServiceError as E;
+            let status = match &e {
+                E::Conflict => StatusCode::CONFLICT,
+                E::BadRequest(_) => StatusCode::BAD_REQUEST,
+                E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(SecretWriteResponse { version }))
 }
@@ -637,19 +425,15 @@ pub async fn secrets_delete_handler(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     tracing::debug!(account = %ctx.account_id, path = %path, "secrets.delete");
 
-    let secrets = state.secrets.read().await;
-    let engine = secrets.as_ref().ok_or_else(|| {
+    state.secret_delete(&path).await.map_err(|e| {
+        use egide_api::ServiceError as E;
+        let status = match &e {
+            E::NotFound => StatusCode::NOT_FOUND,
+            E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
         (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Vault is sealed".into(),
-            }),
-        )
-    })?;
-
-    engine.delete(&path).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            status,
             Json(ErrorResponse {
                 error: e.to_string(),
             }),
@@ -666,19 +450,14 @@ pub async fn secrets_list_root_handler(
 ) -> Result<Json<SecretListResponse>, (StatusCode, Json<ErrorResponse>)> {
     tracing::debug!(account = %ctx.account_id, "secrets.list");
 
-    let secrets = state.secrets.read().await;
-    let engine = secrets.as_ref().ok_or_else(|| {
+    let items = state.secret_list("").await.map_err(|e| {
+        use egide_api::ServiceError as E;
+        let status = match &e {
+            E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
         (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Vault is sealed".into(),
-            }),
-        )
-    })?;
-
-    let items = engine.list("").await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            status,
             Json(ErrorResponse {
                 error: e.to_string(),
             }),
@@ -700,23 +479,10 @@ async fn service_token_create_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateServiceTokenRequest>,
 ) -> Result<(StatusCode, Json<CreateServiceTokenResponse>), Problem> {
-    if !ctx.is_root() {
-        return Err(Problem::new(
-            StatusCode::FORBIDDEN,
-            "service token management requires root privileges",
-        ));
-    }
-    if req.service_name.trim().is_empty() {
-        return Err(Problem::new(
-            StatusCode::BAD_REQUEST,
-            "service_name must not be empty",
-        ));
-    }
     let (token_id, token) = state
-        .service_tokens
-        .create(&req.service_name)
+        .create_service_token(&ctx, &req.service_name)
         .await
-        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(Problem::from)?;
     Ok((
         StatusCode::CREATED,
         Json(CreateServiceTokenResponse { token_id, token }),
@@ -728,17 +494,10 @@ async fn service_token_list_handler(
     Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<ServiceTokenMetadata>>, Problem> {
-    if !ctx.is_root() {
-        return Err(Problem::new(
-            StatusCode::FORBIDDEN,
-            "service token management requires root privileges",
-        ));
-    }
     let records = state
-        .service_tokens
-        .list()
+        .list_service_tokens(&ctx)
         .await
-        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(Problem::from)?;
     let metadata = records
         .into_iter()
         .map(|r| ServiceTokenMetadata {
@@ -757,35 +516,16 @@ async fn service_token_revoke_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(token_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, Problem> {
-    if !ctx.is_root() {
-        return Err(Problem::new(
-            StatusCode::FORBIDDEN,
-            "service token management requires root privileges",
-        ));
-    }
-    let existed = state
-        .service_tokens
-        .revoke(&token_id)
+    state
+        .revoke_service_token(&ctx, &token_id)
         .await
-        .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if existed {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(Problem::new(
-            StatusCode::NOT_FOUND,
-            "service token not found",
-        ))
-    }
+        .map_err(Problem::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ============================================================================
 // Utilities
 // ============================================================================
-
-fn base64_encode(data: &[u8]) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    STANDARD.encode(data)
-}
 
 /// Creates the auth service composing root-token and service-token backends.
 fn create_auth_service(
@@ -866,19 +606,19 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         tracing::warn!("===========================================");
     }
 
-    // Ensure data directory exists
+    // Ensure data directory exists.
     tokio::fs::create_dir_all(&cli.data_dir).await?;
 
-    // Initialize seal manager
+    // Initialize seal manager.
     let mut seal_manager = SealManager::new(&cli.data_dir).await?;
 
-    // In dev mode, enable auto-unseal
+    // In dev mode, enable auto-unseal.
     if cli.dev {
         seal_manager.enable_dev_mode().await?;
         tracing::info!("Dev mode: auto-unseal enabled");
     }
 
-    // Build shared service token store
+    // Build shared service token store.
     let service_store = ServiceTokenStore::new(
         Arc::new(seal_manager.storage().clone()) as Arc<dyn egide_storage::StorageBackend>
     );
@@ -895,11 +635,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         service_tokens: service_store,
     });
 
-    // If already unsealed (dev mode), initialize secrets engine
+    // If already unsealed (dev mode), initialize the engines.
     {
-        let seal = state.seal.read().await;
-        if seal.status() == SealStatus::Unsealed {
-            drop(seal);
+        let sv = state.status().await;
+        if !sv.sealed {
             state
                 .ensure_secrets_engine()
                 .await

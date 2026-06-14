@@ -2,7 +2,8 @@
 //!
 //! Key management (create, rotate, delete) is root-only; reads and data
 //! operations are open to any authenticated bearer. The engine is unseal-gated,
-//! so every route returns `503` while the server is sealed.
+//! so every route returns `503` while the server is sealed. Authorization and
+//! seal-gating are enforced by the service layer; handlers are thin adapters.
 
 use std::sync::Arc;
 
@@ -12,52 +13,7 @@ use axum::Json;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 
-use egide_auth::AuthContext;
-use egide_transit::{KeyConfig, KeyType, TransitError};
-
 use crate::{AppState, Authenticated, Problem};
-
-// ============================================================================
-// Guards and error mapping
-// ============================================================================
-
-/// Problem returned when a transit route is hit while the server is sealed.
-fn sealed() -> Problem {
-    Problem::new(StatusCode::SERVICE_UNAVAILABLE, "Vault is sealed")
-}
-
-/// Rejects non-root callers from key management routes.
-fn require_root(ctx: &AuthContext) -> Result<(), Problem> {
-    if ctx.is_root() {
-        Ok(())
-    } else {
-        Err(Problem::new(
-            StatusCode::FORBIDDEN,
-            "transit key management requires root privileges",
-        ))
-    }
-}
-
-/// Maps a `TransitError` to an RFC 9457 problem response.
-fn transit_problem(err: TransitError) -> Problem {
-    let status = match &err {
-        TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
-            StatusCode::NOT_FOUND
-        },
-        TransitError::KeyExists(_) => StatusCode::CONFLICT,
-        TransitError::InvalidCiphertext
-        | TransitError::InvalidKeyName(_)
-        | TransitError::InvalidKeyType(_)
-        | TransitError::VersionBelowMinEncryption { .. }
-        | TransitError::VersionBelowMinDecryption { .. }
-        | TransitError::DecryptionFailed => StatusCode::BAD_REQUEST,
-        TransitError::OperationNotAllowed(_)
-        | TransitError::NotExportable(_)
-        | TransitError::DeletionNotAllowed(_) => StatusCode::FORBIDDEN,
-        TransitError::Storage(_) | TransitError::Crypto(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    Problem::new(status, err.to_string())
-}
 
 // ============================================================================
 // Request / response bodies
@@ -154,25 +110,13 @@ pub async fn create_key_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<KeyCreatedResponse>), Problem> {
-    require_root(&ctx)?;
-
-    let key_type = match req.key_type.as_deref() {
-        None => KeyType::default(),
-        Some(raw) => raw.parse::<KeyType>().map_err(transit_problem)?,
-    };
-
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-
-    let mut config = KeyConfig::new();
-    config.key_type = key_type;
-    config.deletion_allowed = req.deletion_allowed;
-
-    let key = engine
-        .create_key(&req.name, config)
+    let key_type = req.key_type.as_deref().unwrap_or("aes256-gcm");
+    state
+        .create_key(&ctx, &req.name, key_type, req.deletion_allowed)
         .await
-        .map_err(transit_problem)?;
-
+        .map_err(Problem::from)?;
+    // Retrieve key metadata to build the response (preserves the original body shape).
+    let key = state.get_key(&req.name).await.map_err(Problem::from)?;
     Ok((
         StatusCode::CREATED,
         Json(KeyCreatedResponse {
@@ -188,9 +132,7 @@ pub async fn list_keys_handler(
     Authenticated(_ctx): Authenticated,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ListKeysResponse>, Problem> {
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let keys = engine.list_keys().await.map_err(transit_problem)?;
+    let keys = state.list_keys().await.map_err(Problem::from)?;
     Ok(Json(ListKeysResponse { keys }))
 }
 
@@ -200,9 +142,7 @@ pub async fn get_key_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<KeyInfoResponse>, Problem> {
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let key = engine.get_key(&name).await.map_err(transit_problem)?;
+    let key = state.get_key(&name).await.map_err(Problem::from)?;
     Ok(Json(KeyInfoResponse {
         name: key.name,
         key_type: key.key_type.to_string(),
@@ -221,10 +161,7 @@ pub async fn delete_key_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, Problem> {
-    require_root(&ctx)?;
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    engine.delete_key(&name).await.map_err(transit_problem)?;
+    state.delete_key(&ctx, &name).await.map_err(Problem::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -234,10 +171,7 @@ pub async fn rotate_key_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<RotateResponse>, Problem> {
-    require_root(&ctx)?;
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let version = engine.rotate_key(&name).await.map_err(transit_problem)?;
+    let version = state.rotate_key(&ctx, &name).await.map_err(Problem::from)?;
     Ok(Json(RotateResponse { version }))
 }
 
@@ -246,6 +180,9 @@ pub async fn rotate_key_handler(
 // ============================================================================
 
 /// Handles `POST /v1/transit/encrypt/{name}`.
+///
+/// The request carries base64-encoded plaintext; the handler decodes it before
+/// calling the service (which works with raw bytes). Base64 is a REST concern.
 pub async fn encrypt_handler(
     Authenticated(_ctx): Authenticated,
     State(state): State<Arc<AppState>>,
@@ -255,45 +192,41 @@ pub async fn encrypt_handler(
     let plaintext = BASE64
         .decode(req.plaintext.as_bytes())
         .map_err(|_| Problem::new(StatusCode::BAD_REQUEST, "plaintext must be valid base64"))?;
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let ciphertext = engine
+    let ciphertext = state
         .encrypt(&name, &plaintext)
         .await
-        .map_err(transit_problem)?;
+        .map_err(Problem::from)?;
     Ok(Json(CiphertextResponse { ciphertext }))
 }
 
 /// Handles `POST /v1/transit/decrypt/{name}`.
+///
+/// The service returns raw bytes; the handler base64-encodes them for the JSON
+/// response. Base64 is a REST concern.
 pub async fn decrypt_handler(
     Authenticated(_ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(req): Json<CiphertextRequest>,
 ) -> Result<Json<PlaintextResponse>, Problem> {
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let plaintext = engine
+    let plaintext = state
         .decrypt(&name, &req.ciphertext)
         .await
-        .map_err(transit_problem)?;
+        .map_err(Problem::from)?;
     Ok(Json(PlaintextResponse {
         plaintext: BASE64.encode(&plaintext),
     }))
 }
 
 /// Handles `POST /v1/transit/datakey/{name}`.
+///
+/// The plaintext key bytes are base64-encoded in the response. Base64 is a REST concern.
 pub async fn datakey_handler(
     Authenticated(_ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<DataKeyResponse>, Problem> {
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let datakey = engine
-        .generate_datakey(&name)
-        .await
-        .map_err(transit_problem)?;
+    let datakey = state.datakey(&name).await.map_err(Problem::from)?;
     Ok(Json(DataKeyResponse {
         plaintext: BASE64.encode(&datakey.plaintext),
         ciphertext: datakey.ciphertext,
@@ -307,11 +240,9 @@ pub async fn rewrap_handler(
     Path(name): Path<String>,
     Json(req): Json<CiphertextRequest>,
 ) -> Result<Json<CiphertextResponse>, Problem> {
-    let transit = state.transit.read().await;
-    let engine = transit.as_ref().ok_or_else(sealed)?;
-    let ciphertext = engine
+    let ciphertext = state
         .rewrap(&name, &req.ciphertext)
         .await
-        .map_err(transit_problem)?;
+        .map_err(Problem::from)?;
     Ok(Json(CiphertextResponse { ciphertext }))
 }
