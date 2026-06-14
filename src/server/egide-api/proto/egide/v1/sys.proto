@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package egide.v1;
+
+/// System domain: vault lifecycle (status, init, unseal, seal).
+service SysService {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Unseal(UnsealRequest) returns (UnsealResponse);
+  rpc Seal(SealRequest) returns (SealResponse);
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string version = 1;
+  bool initialized = 2;
+  bool sealed = 3;
+}
+
+message InitRequest {
+  uint32 shares = 1;
+  uint32 threshold = 2;
+}
+
+message InitResponse {
+  string root_token = 1;
+  repeated string shares_hex = 2;
+  repeated string shares_base64 = 3;
+}
+
+message UnsealRequest {
+  string share_hex = 1;
+}
+
+message UnsealResponse {
+  bool sealed = 1;
+  uint32 threshold = 2;
+  uint32 progress = 3;
+}
+
+message SealRequest {}
+
+message SealResponse {}

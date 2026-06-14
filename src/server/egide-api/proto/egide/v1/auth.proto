@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package egide.v1;
+
+/// Service-token domain: machine-identity tokens for service-to-service auth.
+///
+/// Named ServiceTokenService (not AuthService) to avoid collision with the
+/// internal egide_auth::AuthService used for bearer-token validation.
+service ServiceTokenService {
+  rpc Create(CreateServiceTokenRequest) returns (CreateServiceTokenResponse);
+  rpc List(ListServiceTokensRequest) returns (ListServiceTokensResponse);
+  rpc Revoke(RevokeServiceTokenRequest) returns (RevokeServiceTokenResponse);
+}
+
+message CreateServiceTokenRequest {
+  string service_name = 1;
+}
+
+message CreateServiceTokenResponse {
+  string token_id = 1;
+  // Raw token shown exactly once; not stored in plain text after this response.
+  string raw_token = 2;
+}
+
+message ListServiceTokensRequest {}
+
+message ListServiceTokensResponse {
+  repeated ServiceTokenRecord records = 1;
+}
+
+message ServiceTokenRecord {
+  string token_id = 1;
+  string service_name = 2;
+  bool revoked = 3;
+  uint64 created_at = 4;
+}
+
+message RevokeServiceTokenRequest {
+  string token_id = 1;
+}
+
+message RevokeServiceTokenResponse {}
