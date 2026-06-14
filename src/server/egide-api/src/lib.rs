@@ -22,8 +22,7 @@ pub mod service_tokens;
 pub mod proto {
     tonic::include_proto!("egide.v1");
     /// Reflection descriptor set.
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("egide_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("egide_descriptor");
 }
 
 #[cfg(test)]
