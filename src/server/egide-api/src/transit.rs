@@ -82,6 +82,9 @@ impl ServiceContext {
     /// Returns [`ServiceError::Sealed`] if the vault is sealed.
     /// Returns [`ServiceError::Conflict`] if a key with the same name already exists.
     /// Returns [`ServiceError::BadRequest`] if `key_type` is not a recognized key type.
+    ///
+    /// If `key_type` is empty or blank, it defaults to `"aes256-gcm"`. This
+    /// normalization lives here so that REST and gRPC handlers cannot drift.
     pub async fn create_key(
         &self,
         ctx: &AuthContext,
@@ -93,7 +96,14 @@ impl ServiceContext {
         let engine = guard.as_ref().ok_or(ServiceError::Sealed)?;
         require_root(ctx)?;
 
-        let parsed_type = key_type.parse::<KeyType>().map_err(map_transit_error)?;
+        let effective_type = if key_type.trim().is_empty() {
+            "aes256-gcm"
+        } else {
+            key_type
+        };
+        let parsed_type = effective_type
+            .parse::<KeyType>()
+            .map_err(map_transit_error)?;
 
         let mut config = KeyConfig::new();
         config.key_type = parsed_type;
@@ -500,5 +510,35 @@ mod tests {
             .unwrap();
         let err = c.get_key("deletable").await.unwrap_err();
         assert!(matches!(err, crate::ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn create_key_with_empty_type_defaults_to_aes() {
+        // An empty key_type string must be silently normalized to "aes256-gcm"
+        // by the service layer so that both REST and gRPC behave identically.
+        let (_t, c) = crate::test_support::unsealed_context().await;
+        c.create_key(&AuthContext::root(), "default-type-key", "", false)
+            .await
+            .expect("create_key with empty type should succeed");
+        let key = c.get_key("default-type-key").await.expect("get_key");
+        assert_eq!(
+            key.key_type.to_string(),
+            "aes256-gcm",
+            "empty key_type should default to aes256-gcm"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_key_non_empty_invalid_type_is_bad_request() {
+        // A non-empty but unrecognized key_type must still return BadRequest.
+        let (_t, c) = crate::test_support::unsealed_context().await;
+        let err = c
+            .create_key(&AuthContext::root(), "bad-type2", "rsa-4096", false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::ServiceError::BadRequest(_)),
+            "expected BadRequest for unknown type, got {err:?}"
+        );
     }
 }

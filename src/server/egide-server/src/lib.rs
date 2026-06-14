@@ -1,5 +1,7 @@
 //! Egide Server library - router, state, handlers.
 
+pub mod grpc;
+
 pub mod problem;
 pub use problem::Problem;
 
@@ -81,9 +83,13 @@ pub struct Cli {
     #[arg(long, env = "EGIDE_DEV_MODE")]
     pub dev: bool,
 
-    /// Server bind address.
+    /// REST server bind address.
     #[arg(long, default_value = "0.0.0.0:8200", env = "EGIDE_BIND_ADDRESS")]
     pub bind: String,
+
+    /// gRPC server bind address.
+    #[arg(long, default_value = "0.0.0.0:8201", env = "EGIDE_GRPC_BIND")]
+    pub grpc_bind: String,
 }
 
 // ============================================================================
@@ -652,14 +658,24 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     let app = build_router(state.clone());
 
-    let addr: SocketAddr = cli.bind.parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let rest_addr: SocketAddr = cli.bind.parse()?;
+    let grpc_addr: SocketAddr = cli.grpc_bind.parse()?;
 
-    tracing::info!("Egide server listening on http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(rest_addr).await?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    tracing::info!("REST on http://{rest_addr}, gRPC on http://{grpc_addr}");
+
+    let rest_handle = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .map_err(anyhow::Error::from)
+    });
+    let grpc_handle = tokio::spawn(grpc::serve(state, grpc_addr, shutdown_signal()));
+
+    let (rest_res, grpc_res) = tokio::join!(rest_handle, grpc_handle);
+    rest_res.map_err(|e| anyhow::anyhow!("REST task panicked: {e}"))??;
+    grpc_res.map_err(|e| anyhow::anyhow!("gRPC task panicked: {e}"))??;
 
     tracing::info!("Egide server stopped");
 
