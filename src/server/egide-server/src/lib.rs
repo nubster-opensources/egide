@@ -1,5 +1,7 @@
 //! Egide Server library - router, state, handlers.
 
+pub mod grpc;
+
 pub mod problem;
 pub use problem::Problem;
 
