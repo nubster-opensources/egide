@@ -41,19 +41,17 @@ pub struct TransitGrpc {
 #[tonic::async_trait]
 impl TransitService for TransitGrpc {
     /// Creates a transit key. Bearer + root required.
+    ///
+    /// The default key type normalization (empty -> `"aes256-gcm"`) is applied
+    /// by the service layer so both transports behave identically.
     async fn create_key(
         &self,
         request: Request<CreateKeyRequest>,
     ) -> Result<Response<CreateKeyResponse>, Status> {
         let ctx = authenticate(&request, &self.state).await?;
         let req = request.into_inner();
-        let key_type = if req.key_type.is_empty() {
-            "aes256-gcm"
-        } else {
-            &req.key_type
-        };
         self.state
-            .create_key(&ctx, &req.name, key_type, req.deletion_allowed)
+            .create_key(&ctx, &req.name, &req.key_type, req.deletion_allowed)
             .await
             .map_err(to_status)?;
         Ok(Response::new(CreateKeyResponse {}))

@@ -62,3 +62,37 @@ pub(crate) async fn unsealed_context() -> (tempfile::TempDir, Arc<ServiceContext
 
     (tmp, ctx)
 }
+
+/// Builds a completely uninitialized [`ServiceContext`] backed by a temporary directory.
+///
+/// The seal manager has never been initialized: no Shamir shares, no root token.
+/// Use this when testing behavior that requires the vault to be in the
+/// `Uninitialized` state, such as verifying that `init` rejects an invalid
+/// Shamir configuration.
+///
+/// Returns the [`tempfile::TempDir`] (must be held alive for the duration of the test)
+/// and an `Arc<ServiceContext>`.
+pub(crate) async fn uninitialized_context() -> (tempfile::TempDir, Arc<ServiceContext>) {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let seal_manager = SealManager::new(tmp.path()).await.expect("seal manager");
+
+    let storage: Arc<dyn StorageBackend> = Arc::new(seal_manager.storage());
+    let service_store = ServiceTokenStore::new(storage);
+    let auth = AuthService::new(vec![
+        Box::new(RootTokenBackend::new(Arc::new(seal_manager.storage()))),
+        Box::new(ServiceTokenBackend::new(service_store.clone())),
+    ]);
+
+    let ctx = Arc::new(ServiceContext {
+        auth,
+        seal: RwLock::new(seal_manager),
+        secrets: RwLock::new(None),
+        transit: RwLock::new(None),
+        data_dir: tmp.path().to_path_buf(),
+        start_time: Instant::now(),
+        version: "0.1.0-test",
+        service_tokens: service_store,
+    });
+
+    (tmp, ctx)
+}

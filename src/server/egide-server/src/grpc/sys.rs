@@ -45,12 +45,18 @@ impl SysService for SysGrpc {
     }
 
     /// Initializes the vault. No authentication required; a synthetic root context is used.
+    ///
+    /// proto3 scalars default to 0 when omitted; normalize 0 values to the
+    /// same defaults that the REST handler applies via `#[serde(default)]`:
+    /// `shares` defaults to 5, `threshold` defaults to 3.
     async fn init(&self, request: Request<InitRequest>) -> Result<Response<InitResponse>, Status> {
         let req = request.into_inner();
-        let shares = u8::try_from(req.shares)
+        let shares_raw = u8::try_from(req.shares)
             .map_err(|_| Status::invalid_argument("shares must fit in u8"))?;
-        let threshold = u8::try_from(req.threshold)
+        let threshold_raw = u8::try_from(req.threshold)
             .map_err(|_| Status::invalid_argument("threshold must fit in u8"))?;
+        let shares = if shares_raw == 0 { 5 } else { shares_raw };
+        let threshold = if threshold_raw == 0 { 3 } else { threshold_raw };
         let view = self
             .state
             .init(&AuthContext::root(), shares, threshold)

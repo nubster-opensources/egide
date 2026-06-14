@@ -105,12 +105,15 @@ pub struct DataKeyResponse {
 // ============================================================================
 
 /// Handles `POST /v1/transit/keys` (root-only).
+///
+/// The default key type normalization (absent/empty -> `"aes256-gcm"`) is
+/// applied by the service layer so that REST and gRPC behave identically.
 pub async fn create_key_handler(
     Authenticated(ctx): Authenticated,
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<KeyCreatedResponse>), Problem> {
-    let key_type = req.key_type.as_deref().unwrap_or("aes256-gcm");
+    let key_type = req.key_type.as_deref().unwrap_or("");
     state
         .create_key(&ctx, &req.name, key_type, req.deletion_allowed)
         .await
