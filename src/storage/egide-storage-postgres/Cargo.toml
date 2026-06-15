@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-egide-storage = { path = "../egide-storage" }
+egide-storage = { path = "../egide-storage", version = "0.1.0" }
 
 async-trait.workspace = true
 thiserror.workspace = true
