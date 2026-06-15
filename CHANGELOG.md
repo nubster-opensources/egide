@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Pre-release scaffolding toward the `v0.1.0` milestone. See [ROADMAP.md](ROADMAP.md) for the capability targets per version.
+## [0.1.0] - 2026-06-15
+
+First public release. Egide provides a sovereign KMS, Secrets Manager and
+Private CA, with a REST and gRPC server, native service tokens, Shamir-based
+seal/unseal, and SQLite and PostgreSQL storage backends.
 
 ### Added
 - Initial workspace structure and crate layout
