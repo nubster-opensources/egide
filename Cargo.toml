@@ -23,6 +23,9 @@ members = [
     # CLI
     "src/cli/egide-cli",
 
+    # Facade
+    "src/egide",
+
     # Integration tests
     "tests/integration",
 ]

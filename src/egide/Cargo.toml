@@ -1,0 +1,48 @@
+[package]
+name = "egide"
+description = "Egide - sovereign KMS, Secrets Manager and Private CA (umbrella crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+egide-crypto = { path = "../core/egide-crypto", version = "0.1.0", optional = true }
+egide-storage = { path = "../storage/egide-storage", version = "0.1.0", optional = true }
+egide-storage-sqlite = { path = "../storage/egide-storage-sqlite", version = "0.1.0", optional = true }
+egide-storage-postgres = { path = "../storage/egide-storage-postgres", version = "0.1.0", optional = true }
+egide-seal = { path = "../core/egide-seal", version = "0.1.0", optional = true }
+egide-secrets = { path = "../core/egide-secrets", version = "0.1.0", optional = true }
+egide-kms = { path = "../core/egide-kms", version = "0.1.0", optional = true }
+egide-pki = { path = "../core/egide-pki", version = "0.1.0", optional = true }
+egide-transit = { path = "../core/egide-transit", version = "0.1.0", optional = true }
+
+[features]
+default = []
+crypto = ["dep:egide-crypto"]
+storage = ["dep:egide-storage"]
+storage-sqlite = ["dep:egide-storage-sqlite"]
+storage-postgres = ["dep:egide-storage-postgres"]
+seal = ["dep:egide-seal"]
+secrets = ["dep:egide-secrets"]
+kms = ["dep:egide-kms"]
+pki = ["dep:egide-pki"]
+transit = ["dep:egide-transit"]
+full = [
+    "crypto",
+    "storage",
+    "storage-sqlite",
+    "storage-postgres",
+    "seal",
+    "secrets",
+    "kms",
+    "pki",
+    "transit",
+]
