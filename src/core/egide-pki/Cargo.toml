@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-egide-crypto = { path = "../egide-crypto" }
-egide-storage = { path = "../../storage/egide-storage" }
+egide-crypto = { path = "../egide-crypto", version = "0.1.0" }
+egide-storage = { path = "../../storage/egide-storage", version = "0.1.0" }
 
 thiserror.workspace = true

@@ -23,12 +23,15 @@ members = [
     # CLI
     "src/cli/egide-cli",
 
+    # Facade
+    "src/egide",
+
     # Integration tests
     "tests/integration",
 ]
 
 [workspace.package]
-version = "0.1.0-alpha"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
