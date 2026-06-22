@@ -6,10 +6,9 @@ Egide is designed to help organizations meet regulatory compliance requirements.
 
 | Standard | Status | Key Features |
 |----------|--------|--------------|
-| **GDPR** | Supported | Data sovereignty, audit trails, encryption |
+| **GDPR** | Supported | Data residency, audit trails, encryption |
 | **SOC 2** | Supported | Access controls, audit logging, encryption |
 | **ISO 27001** | Supported | Security controls, documentation |
-| **SecNumCloud** | Ready | French security certification |
 | **PCI DSS** | Partial | Encryption, access control |
 | **HIPAA** | Partial | Encryption, audit trails |
 
@@ -26,9 +25,9 @@ Egide is designed to help organizations meet regulatory compliance requirements.
 | Art. 33 | Breach notification | Audit logs for forensics |
 | Art. 17 | Right to erasure | Secret deletion |
 
-### Data Sovereignty
+### Data Residency
 
-Egide supports data sovereignty requirements:
+Egide supports data residency requirements:
 
 - **Self-hosted**: Deploy in your own infrastructure
 - **EU hosting**: Deploy in EU data centers
@@ -104,25 +103,6 @@ Egide supports ISO 27001 documentation requirements:
 - Access control matrix (policies)
 - Audit records (logs)
 - Change logs (versioning)
-
-## SecNumCloud (French)
-
-### Requirements
-
-| Requirement | Egide Support |
-|-------------|---------------|
-| Data localization | Self-hosted in France |
-| Encryption | AES-256-GCM |
-| Key management | Shamir's Secret Sharing |
-| Access control | Policy-based authorization |
-| Audit | Complete audit logging |
-
-### Certification Path
-
-1. Deploy Egide self-hosted in France
-2. Configure according to SecNumCloud requirements
-3. Implement organizational controls
-4. Undergo certification audit
 
 ## PCI DSS
 

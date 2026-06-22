@@ -318,10 +318,10 @@ pub async fn unseal_handler(
         )
     })?;
 
-    if !view.sealed {
-        tracing::info!("Vault unsealed successfully");
-    } else {
+    if view.sealed {
         tracing::info!("Unseal progress: {}/{}", view.progress, view.threshold);
+    } else {
+        tracing::info!("Vault unsealed successfully");
     }
 
     Ok(Json(UnsealResponse {

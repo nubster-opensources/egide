@@ -1,4 +1,4 @@
-//! gRPC implementation of the ServiceToken service (`ServiceTokenService`).
+//! gRPC implementation of the `ServiceToken` service (`ServiceTokenService`).
 //!
 //! Auth parity with REST handlers in `lib.rs`:
 //! All three operations require a bearer token; the service layer enforces
@@ -19,7 +19,7 @@ use egide_api::proto::{
 use crate::grpc::auth::authenticate;
 use crate::grpc::status_map::to_status;
 
-/// gRPC handler struct for the ServiceToken domain.
+/// gRPC handler struct for the `ServiceToken` domain.
 ///
 /// Holds a shared reference to the application service context.
 #[derive(Clone)]

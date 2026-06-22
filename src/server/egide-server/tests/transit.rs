@@ -1,3 +1,4 @@
+//! Integration tests for the transit REST endpoints.
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};

@@ -1,3 +1,4 @@
+//! Integration tests for the service token REST endpoints.
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use egide_auth::{RootTokenBackend, ServiceTokenBackend, ServiceTokenStore};

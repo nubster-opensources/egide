@@ -38,6 +38,7 @@ pub struct AuthContext {
 
 impl AuthContext {
     /// Creates a root token context (for dev mode).
+    #[must_use]
     pub fn root() -> Self {
         Self {
             account_id: "root".to_string(),
@@ -49,6 +50,7 @@ impl AuthContext {
     }
 
     /// Checks if this is a root context.
+    #[must_use]
     pub fn is_root(&self) -> bool {
         self.auth_method == AuthMethod::RootToken && self.account_id == "root"
     }

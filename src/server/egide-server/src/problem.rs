@@ -8,10 +8,14 @@ use serde::Serialize;
 /// An RFC 9457 problem detail.
 #[derive(Debug, Serialize)]
 pub struct Problem {
+    /// URI reference identifying the problem type (serialized as `type`).
     #[serde(rename = "type")]
     pub type_uri: String,
+    /// Short, human-readable summary of the problem type.
     pub title: String,
+    /// HTTP status code for this problem.
     pub status: u16,
+    /// Human-readable explanation specific to this occurrence.
     pub detail: String,
 }
 

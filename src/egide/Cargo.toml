@@ -1,6 +1,6 @@
 [package]
 name = "egide"
-description = "Egide - sovereign KMS, Secrets Manager and Private CA (umbrella crate)"
+description = "Egide - KMS, Secrets Manager and Private CA (umbrella crate)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,9 @@ documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
+
+[lints]
+workspace = true
 
 [dependencies]
 egide-crypto = { path = "../core/egide-crypto", version = "0.1.0", optional = true }

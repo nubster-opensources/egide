@@ -24,7 +24,7 @@ use egide_api::ServiceContext;
 /// Builds and serves the gRPC server on `addr`, shutting down when `shutdown` resolves.
 ///
 /// Registers tonic health (v1), gRPC reflection (v1), and all four Egide domain
-/// services: Sys, Secrets, Transit, and ServiceToken. The health reporter marks
+/// services: Sys, Secrets, Transit, and `ServiceToken`. The health reporter marks
 /// the Transit service as `SERVING` on startup; overall server health (`""`) is
 /// set to `SERVING` by tonic-health by default.
 pub async fn serve(

@@ -1,6 +1,6 @@
-//! Egide is a sovereign KMS, Secrets Manager and Private CA written in Rust.
+//! egide is a self-hosted KMS, Secrets Manager and Private CA written in Rust.
 //!
-//! This umbrella crate re-exports the Egide building blocks behind feature
+//! This umbrella crate re-exports the egide building blocks behind feature
 //! flags, so a single dependency gives access to the engines you need:
 //!
 //! ```toml

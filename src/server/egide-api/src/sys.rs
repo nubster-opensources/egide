@@ -67,6 +67,7 @@ impl ServiceContext {
         shares: u8,
         threshold: u8,
     ) -> Result<InitView, ServiceError> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
         if !ctx.is_root() {
             return Err(ServiceError::Forbidden("init requires root".into()));
         }
@@ -79,10 +80,9 @@ impl ServiceContext {
             SealError::InvalidConfig(msg) => ServiceError::BadRequest(msg),
             other => ServiceError::Internal(other.to_string()),
         })?;
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
         Ok(InitView {
             root_token: res.root_token,
-            shares_hex: res.shares.iter().map(|s| s.to_hex()).collect(),
+            shares_hex: res.shares.iter().map(egide_seal::Share::to_hex).collect(),
             shares_base64: res.shares.iter().map(|s| BASE64.encode(&s.data)).collect(),
         })
     }

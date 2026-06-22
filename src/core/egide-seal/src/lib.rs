@@ -12,7 +12,6 @@
 //! A minimum of M shares (threshold) are required to reconstruct the key.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod error;
 
@@ -42,12 +41,12 @@ pub use error::SealError;
 
 /// Keys for system.db storage.
 mod keys {
-    pub const ROOT_TOKEN_HASH: &str = "root_token_hash";
-    pub const SHAMIR_THRESHOLD: &str = "shamir_threshold";
-    pub const SHAMIR_TOTAL: &str = "shamir_total";
-    pub const INITIALIZED_AT: &str = "initialized_at";
-    pub const DEV_MODE_KEY: &str = "dev_mode_master_key";
-    pub const MASTER_KEY_HMAC: &str = "master_key_hmac";
+    pub(crate) const ROOT_TOKEN_HASH: &str = "root_token_hash";
+    pub(crate) const SHAMIR_THRESHOLD: &str = "shamir_threshold";
+    pub(crate) const SHAMIR_TOTAL: &str = "shamir_total";
+    pub(crate) const INITIALIZED_AT: &str = "initialized_at";
+    pub(crate) const DEV_MODE_KEY: &str = "dev_mode_master_key";
+    pub(crate) const MASTER_KEY_HMAC: &str = "master_key_hmac";
 }
 
 /// State of the vault seal.
@@ -96,13 +95,14 @@ pub struct Share {
 
 impl Share {
     /// Encodes the share as a hex string for display.
+    #[must_use]
     pub fn to_hex(&self) -> String {
         hex_encode(&self.data)
     }
 
     /// Decodes a share from a hex string.
     pub fn from_hex(hex: &str) -> Result<Self, SealError> {
-        let data = hex_decode(hex).map_err(|e| SealError::InvalidShare(e.to_string()))?;
+        let data = hex_decode(hex).map_err(|e| SealError::InvalidShare(e.clone()))?;
         if data.is_empty() {
             return Err(SealError::InvalidShare("empty share".into()));
         }
@@ -149,7 +149,7 @@ pub struct SealManager {
 }
 
 impl SealManager {
-    /// Creates a new SealManager with storage path.
+    /// Creates a new `SealManager` with storage path.
     pub async fn new(data_path: impl AsRef<Path>) -> Result<Self, SealError> {
         let data_path = data_path.as_ref().to_path_buf();
         let storage = SqliteBackend::open(&data_path, "system").await?;
@@ -202,11 +202,13 @@ impl SealManager {
     }
 
     /// Returns the current seal status.
+    #[must_use]
     pub fn status(&self) -> SealStatus {
         self.status
     }
 
     /// Returns true if running in dev mode.
+    #[must_use]
     pub fn is_dev_mode(&self) -> bool {
         self.dev_mode
     }
@@ -229,7 +231,7 @@ impl SealManager {
         let master_key = MasterKey::generate();
 
         // Compute HMAC for master key verification
-        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes());
+        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
 
         // Split with Shamir
         let sharks = Sharks(config.threshold);
@@ -252,10 +254,7 @@ impl SealManager {
         let root_token_hash = hash_token(&root_token)?;
 
         // Store configuration
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
-            .as_secs();
+        let now = current_unix_secs()?;
 
         self.storage
             .put(keys::ROOT_TOKEN_HASH, root_token_hash.as_bytes())
@@ -283,6 +282,9 @@ impl SealManager {
     }
 
     /// Submits a share for unsealing.
+    // Kept async to match the public API signature expected by callers; storage calls may be
+    // added in a future version without a breaking change.
+    #[allow(clippy::unused_async)]
     pub async fn unseal(&mut self, share: &Share) -> Result<UnsealProgress, SealError> {
         match self.status {
             SealStatus::Uninitialized => return Err(SealError::NotInitialized),
@@ -314,10 +316,13 @@ impl SealManager {
             self.reconstruct_master_key()?;
         }
 
+        // pending_shares.len() is always bounded by self.threshold (a u8), so the cast is safe.
+        #[allow(clippy::cast_possible_truncation)]
+        let progress = self.pending_shares.len() as u8;
         Ok(UnsealProgress {
             sealed: self.status == SealStatus::Sealed,
             threshold: self.threshold,
-            progress: self.pending_shares.len() as u8,
+            progress,
         })
     }
 
@@ -337,7 +342,7 @@ impl SealManager {
             SealError::ReconstructionFailed
         })?;
 
-        let computed_hmac = compute_master_key_hmac(&secret);
+        let computed_hmac = compute_master_key_hmac(&secret)?;
         if computed_hmac != *expected_hmac {
             warn!("Master key reconstruction failed - HMAC mismatch (invalid shares?)");
             // Clear pending shares before returning error
@@ -377,6 +382,7 @@ impl SealManager {
     }
 
     /// Returns the master key (only if unsealed).
+    #[must_use]
     pub fn master_key(&self) -> Option<&MasterKey> {
         self.master_key.as_ref()
     }
@@ -394,16 +400,13 @@ impl SealManager {
         let master_key = MasterKey::generate();
 
         // Compute HMAC for master key verification (consistency with initialize)
-        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes());
+        let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
 
         // Generate root token
         let root_token = generate_token(32);
         let root_token_hash = hash_token(&root_token)?;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
-            .as_secs();
+        let now = current_unix_secs()?;
 
         self.storage
             .put(keys::ROOT_TOKEN_HASH, root_token_hash.as_bytes())
@@ -448,16 +451,31 @@ impl SealManager {
     /// Returns a clone of the storage backend.
     ///
     /// This is useful for external components that need to read system data.
+    #[must_use]
     pub fn storage(&self) -> SqliteBackend {
         self.storage.clone()
     }
 }
 
+/// Returns the current time as seconds since the UNIX epoch.
+///
+/// Returns a [`SealError::Crypto`] if the system clock is set before the UNIX epoch.
+fn current_unix_secs() -> Result<u64, SealError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| SealError::Crypto(format!("system clock error: {e}")))
+}
+
 /// Computes HMAC-SHA256 of the master key for verification.
-fn compute_master_key_hmac(master_key: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(master_key).expect("HMAC can take key of any size");
+///
+/// Returns a [`SealError::Crypto`] if the underlying MAC construction fails,
+/// which cannot occur in practice for HMAC-SHA256 with any key length.
+fn compute_master_key_hmac(master_key: &[u8]) -> Result<Vec<u8>, SealError> {
+    let mut mac = HmacSha256::new_from_slice(master_key)
+        .map_err(|e| SealError::Crypto(format!("HMAC construction failed: {e}")))?;
     mac.update(SEAL_VERIFY_TAG);
-    mac.finalize().into_bytes().to_vec()
+    Ok(mac.finalize().into_bytes().to_vec())
 }
 
 /// Generates a random token as hex string.
@@ -577,7 +595,10 @@ mod tests {
 
             if i < 2 {
                 assert!(progress.sealed);
-                assert_eq!(progress.progress, (i + 1) as u8);
+                // i iterates 0..3, so i+1 is always in [1,3]; cast is safe in this test.
+                #[allow(clippy::cast_possible_truncation)]
+                let expected_progress = (i + 1) as u8;
+                assert_eq!(progress.progress, expected_progress);
             } else {
                 assert!(!progress.sealed);
             }

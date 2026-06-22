@@ -1,11 +1,10 @@
-//! # Egide Storage - PostgreSQL Backend
+//! # Egide Storage - `PostgreSQL` Backend
 //!
-//! PostgreSQL implementation of the storage backend with schema-per-tenant
+//! `PostgreSQL` implementation of the storage backend with schema-per-tenant
 //! isolation. Each tenant gets its own Postgres schema; every query qualifies
 //! its tables explicitly, so tenant isolation never depends on session state.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use async_trait::async_trait;
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -13,7 +12,7 @@ use tracing::{debug, info};
 
 use egide_storage::{StorageBackend, StorageError};
 
-/// PostgreSQL storage backend with schema-per-tenant isolation.
+/// `PostgreSQL` storage backend with schema-per-tenant isolation.
 ///
 /// Each tenant maps to a dedicated Postgres schema. All queries qualify their
 /// tables as `"{tenant}".kv_store` / `"{tenant}".kv_history`. The tenant name is
@@ -67,12 +66,14 @@ impl PostgresBackend {
     ///
     /// Returns a new instance with the actor set. All operations performed with
     /// this instance will be logged with this actor.
+    #[must_use]
     pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
         self.actor = Some(actor.into());
         self
     }
 
     /// Returns the current actor, if set.
+    #[must_use]
     pub fn current_actor(&self) -> Option<String> {
         self.actor.clone()
     }
@@ -172,7 +173,8 @@ impl PostgresBackend {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time before UNIX epoch")
-            .as_secs() as i64
+            .as_secs()
+            .cast_signed()
     }
 }
 

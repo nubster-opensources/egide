@@ -20,6 +20,7 @@ pub struct SymmetricKey {
 
 impl SymmetricKey {
     /// Generates a new random symmetric key.
+    #[must_use]
     pub fn generate() -> Self {
         let key = generate_key();
         Self { bytes: *key }
@@ -48,6 +49,7 @@ impl SymmetricKey {
     /// Returns the raw key bytes.
     ///
     /// Use with caution - the returned slice is not zeroized automatically.
+    #[must_use]
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -73,6 +75,7 @@ pub struct MasterKey {
 
 impl MasterKey {
     /// Generates a new random master key.
+    #[must_use]
     pub fn generate() -> Self {
         let key = generate_key();
         Self { bytes: *key }
@@ -99,6 +102,7 @@ impl MasterKey {
     }
 
     /// Returns the raw key bytes.
+    #[must_use]
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -141,7 +145,7 @@ mod tests {
     #[test]
     fn test_symmetric_key_debug_redacted() {
         let key = SymmetricKey::generate();
-        let debug_str = format!("{:?}", key);
+        let debug_str = format!("{key:?}");
         assert!(debug_str.contains("[REDACTED]"));
         assert!(!debug_str.contains("42"));
     }
@@ -162,7 +166,7 @@ mod tests {
     #[test]
     fn test_master_key_debug_redacted() {
         let key = MasterKey::generate();
-        let debug_str = format!("{:?}", key);
+        let debug_str = format!("{key:?}");
         assert!(debug_str.contains("[REDACTED]"));
     }
 

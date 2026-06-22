@@ -294,7 +294,7 @@ impl EgideClient {
 
         let resp = self
             .client
-            .get(self.url(&format!("/v1/secrets/{}", path)))
+            .get(self.url(&format!("/v1/secrets/{path}")))
             .header("X-Egide-Token", token)
             .send()
             .await
@@ -324,7 +324,7 @@ impl EgideClient {
 
         let resp = self
             .client
-            .put(self.url(&format!("/v1/secrets/{}", path)))
+            .put(self.url(&format!("/v1/secrets/{path}")))
             .header("X-Egide-Token", token)
             .json(&req)
             .send()
@@ -349,7 +349,7 @@ impl EgideClient {
 
         let resp = self
             .client
-            .delete(self.url(&format!("/v1/secrets/{}", path)))
+            .delete(self.url(&format!("/v1/secrets/{path}")))
             .header("X-Egide-Token", token)
             .send()
             .await
@@ -408,10 +408,7 @@ async fn cmd_status(client: &EgideClient) -> Result<()> {
 }
 
 async fn cmd_operator_init(client: &EgideClient, shares: u8, threshold: u8) -> Result<()> {
-    println!(
-        "Initializing Egide with {} shares, threshold {}...",
-        shares, threshold
-    );
+    println!("Initializing Egide with {shares} shares, threshold {threshold}...");
 
     let result = client.init(shares, threshold).await?;
 
@@ -437,16 +434,15 @@ async fn cmd_operator_init(client: &EgideClient, shares: u8, threshold: u8) -> R
 }
 
 async fn cmd_operator_unseal(client: &EgideClient, key: Option<String>) -> Result<()> {
-    let key = match key {
-        Some(k) => k,
-        None => {
-            print!("Enter unseal key: ");
-            io::stdout().flush()?;
-            let stdin = io::stdin();
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line)?;
-            line.trim().to_string()
-        },
+    let key = if let Some(k) = key {
+        k
+    } else {
+        print!("Enter unseal key: ");
+        io::stdout().flush()?;
+        let stdin = io::stdin();
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        line.trim().to_string()
     };
 
     if key.is_empty() {
@@ -495,17 +491,17 @@ async fn cmd_secrets_get(
         "value" => {
             if let Some(field) = field {
                 if let Some(value) = secret.data.get(field) {
-                    println!("{}", value);
+                    println!("{value}");
                 } else {
-                    bail!("Field '{}' not found in secret", field);
+                    bail!("Field '{field}' not found in secret");
                 }
             } else {
                 for (k, v) in &secret.data {
-                    println!("{}={}", k, v);
+                    println!("{k}={v}");
                 }
             }
         },
-        _ => bail!("Unknown format: {}. Use 'json' or 'value'", format),
+        _ => bail!("Unknown format: {format}. Use 'json' or 'value'"),
     }
 
     Ok(())
@@ -517,7 +513,7 @@ async fn cmd_secrets_put(client: &EgideClient, path: &str, pairs: &[String]) -> 
     for pair in pairs {
         let parts: Vec<&str> = pair.splitn(2, '=').collect();
         if parts.len() != 2 {
-            bail!("Invalid key=value pair: {}. Use format: key=value", pair);
+            bail!("Invalid key=value pair: {pair}. Use format: key=value");
         }
         data.insert(parts[0].to_string(), parts[1].to_string());
     }
@@ -531,7 +527,7 @@ async fn cmd_secrets_put(client: &EgideClient, path: &str, pairs: &[String]) -> 
 
 async fn cmd_secrets_delete(client: &EgideClient, path: &str) -> Result<()> {
     client.secret_delete(path).await?;
-    println!("Secret '{}' deleted", path);
+    println!("Secret '{path}' deleted");
     Ok(())
 }
 
@@ -543,7 +539,7 @@ async fn cmd_secrets_list(client: &EgideClient) -> Result<()> {
     } else {
         println!("Secrets:");
         for key in &result.keys {
-            println!("  {}", key);
+            println!("  {key}");
         }
     }
 
