@@ -50,7 +50,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Build server (for integration tests)
         run: cargo build -p egide-server
@@ -67,3 +67,20 @@ jobs:
       - name: Build release
         if: github.ref == 'refs/heads/main'
         run: cargo build --release --locked
+
+  msrv-check:
+    name: MSRV check (Rust 1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y protobuf-compiler
+
+      - run: cargo +1.88 check --workspace --all-features
