@@ -229,11 +229,12 @@ All operations are logged:
 }
 ```
 
-### Compliance Features
+### Security Features
 
-- **GDPR**: Data residency, audit trails, right to erasure
-- **SOC 2**: Access controls, audit logging, encryption
-- **ISO 27001**: Security controls, documentation
+- **Data residency**: deploy in any infrastructure you control, no external data export
+- **Audit trail**: append-only, signed log of every operation
+- **Access controls**: policy-based authorization with token authentication
+- **Encryption**: secrets encrypted at rest (AES-256-GCM) and in transit (TLS)
 
 ## Maintenance
 

@@ -90,7 +90,7 @@ Service tokens can read and write secrets but cannot manage other tokens or perf
 - **One server, four engines.** Secrets, KMS, Transit and PKI share a single sealed store, one auth model and one audit trail instead of four disjoint tools.
 - **Keys never leave the server.** Applications call Transit to encrypt, decrypt and sign. The key material stays inside Egide, sealed at rest.
 - **Sealed by default.** The master key is split with Shamir secret sharing. A fresh or restarted server is sealed and serves nothing until a quorum of operators unseals it.
-- **GDPR-native.** Self-host anywhere, keep your data in the EU, and rely on an append-only audit log for compliance.
+- **Self-hostable and auditable.** Run it on your own infrastructure and rely on an append-only, signed audit log.
 - **No lock-in.** Plain REST and gRPC over TLS, hierarchical paths, YAML policies. Nothing proprietary to adopt on the client side.
 
 ## What Egide is not
