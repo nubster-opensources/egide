@@ -1,152 +1,29 @@
-# Compliance
+# Security controls
 
-Egide is designed to help organizations meet regulatory compliance requirements.
+This page describes the technical security controls built into Egide. These controls
+address common requirements around data residency, audit integrity, encryption,
+access management, and key lifecycle.
 
-## Overview
+## Data residency
 
-| Standard | Status | Key Features |
-|----------|--------|--------------|
-| **GDPR** | Supported | Data residency, audit trails, encryption |
-| **SOC 2** | Supported | Access controls, audit logging, encryption |
-| **ISO 27001** | Supported | Security controls, documentation |
-| **PCI DSS** | Partial | Encryption, access control |
-| **HIPAA** | Partial | Encryption, audit trails |
+Egide is fully self-hostable. All secret material, keys, and audit records remain
+within the infrastructure you operate. Nothing is transmitted to external services.
 
-## GDPR (General Data Protection Regulation)
+- Deploy on any host, region, or private network you control.
+- No telemetry or call-home traffic is emitted by the server.
+- Storage backends (SQLite, PostgreSQL) run inside your own environment.
 
-### Relevant Articles
+## Audit trail
 
-| Article | Requirement | Egide Feature |
-|---------|-------------|---------------|
-| Art. 5 | Data minimization | Store only necessary secrets |
-| Art. 25 | Privacy by design | Encryption by default |
-| Art. 30 | Records of processing | Audit logging |
-| Art. 32 | Security of processing | Encryption, access control |
-| Art. 33 | Breach notification | Audit logs for forensics |
-| Art. 17 | Right to erasure | Secret deletion |
+Every operation that touches Egide produces a structured log entry. The audit log is:
 
-### Data Residency
+- **Append-only**: entries are written once and never modified.
+- **Signed**: each entry carries an HMAC chain anchored to the previous entry,
+  making truncation or tampering detectable.
+- **Exportable**: the `egide audit report` command exports logs in JSON or CSV
+  for retention in any SIEM or archival system.
 
-Egide supports data residency requirements:
-
-- **Self-hosted**: Deploy in your own infrastructure
-- **EU hosting**: Deploy in EU data centers
-- **No data export**: Data never leaves your control
-
-### Data Subject Rights
-
-| Right | Implementation |
-|-------|----------------|
-| Access | Audit logs show who accessed data |
-| Erasure | Hard delete secrets permanently |
-| Portability | Export secrets (if allowed by policy) |
-
-## SOC 2
-
-### Trust Service Criteria
-
-| Criteria | Egide Controls |
-|----------|----------------|
-| **Security** | Authentication, authorization, encryption |
-| **Availability** | HA deployment, health monitoring |
-| **Confidentiality** | Encryption at rest and in transit |
-| **Processing Integrity** | Audit logging, versioning |
-| **Privacy** | Access controls, audit trails |
-
-### Control Objectives
-
-#### CC6.1 - Logical Access
-
-- Policy-based access control
-- Token-based authentication
-- Multi-factor via OIDC integration
-- Role separation (admin, operator, user)
-
-#### CC6.2 - System Operations
-
-- Audit logging of all operations
-- Monitoring and alerting
-- Incident response procedures
-
-#### CC6.3 - Change Management
-
-- Version control for configurations
-- Key rotation with versioning
-- Audit trail of changes
-
-### Audit Evidence
-
-Egide provides:
-
-- Complete audit logs
-- Access reports
-- Key usage statistics
-- Authentication events
-
-## ISO 27001
-
-### Annex A Controls
-
-| Control | Implementation |
-|---------|----------------|
-| A.9 Access Control | Policies, authentication |
-| A.10 Cryptography | AES-256, key management |
-| A.12 Operations Security | Logging, monitoring |
-| A.13 Communications | TLS encryption |
-| A.18 Compliance | Audit logs, reports |
-
-### Documentation
-
-Egide supports ISO 27001 documentation requirements:
-
-- Security policies (in policy engine)
-- Access control matrix (policies)
-- Audit records (logs)
-- Change logs (versioning)
-
-## PCI DSS
-
-### Relevant Requirements
-
-| Requirement | Implementation |
-|-------------|----------------|
-| 3.4 | Encryption of cardholder data |
-| 3.5 | Key management procedures |
-| 3.6 | Key rotation |
-| 8.1 | User identification |
-| 10.1 | Audit trails |
-
-### Scope Reduction
-
-Using Egide for secrets management can reduce PCI DSS scope:
-
-- Encrypt cardholder data with Transit Engine
-- Store encryption keys in KMS
-- Centralize access logging
-
-## HIPAA
-
-### Security Rule Requirements
-
-| Requirement | Implementation |
-|-------------|----------------|
-| Access Control | Authentication, authorization |
-| Audit Controls | Comprehensive logging |
-| Integrity | Encryption, versioning |
-| Transmission Security | TLS encryption |
-
-### PHI Protection
-
-- Encrypt PHI with Transit Engine
-- Control access with policies
-- Audit all PHI access
-- Support breach forensics
-
-## Compliance Features
-
-### Audit Logging
-
-All operations are logged:
+Example log entry:
 
 ```json
 {
@@ -160,71 +37,84 @@ All operations are logged:
 }
 ```
 
-### Access Reports
+Retention period is configured at deployment time. See
+[Production deployment](../guides/production.md) for log forwarding guidance.
 
-Generate compliance reports:
+## Encryption at rest and in transit
 
-```bash
-egide audit report \
-  --start "2025-01-01" \
-  --end "2025-01-31" \
-  --format json
-```
+### At rest
 
-### Encryption Evidence
+All secrets and key material are encrypted before being written to storage.
 
-Document encryption controls:
+| Layer | Algorithm | Notes |
+|-------|-----------|-------|
+| Secret values | AES-256-GCM | Per-secret key derived from the master key |
+| Master key | Shamir's Secret Sharing | Split across operator shares; never stored in one piece |
+| Key versions | AES-256-GCM | Each key version encrypted independently |
 
-- Algorithm: AES-256-GCM
-- Key length: 256 bits
-- Key rotation: Automatic with versioning
-- Key protection: Shamir's Secret Sharing
+A sealed server holds no usable key material in memory. After a restart, the server
+refuses all operations until a quorum of operators provides their unseal shares.
 
-### Access Control Matrix
+### In transit
 
-Export policy documentation:
+All API endpoints are served over TLS. Plaintext HTTP is not supported in production
+mode. Minimum TLS version and cipher suite configuration are described in
+[Production deployment](../guides/production.md).
+
+## Access control
+
+Egide enforces policy-based access control on every request.
+
+- **Token authentication**: clients present a bearer token issued by Egide or an
+  external OIDC provider.
+- **Path-based policies**: access rules are expressed as YAML documents that bind
+  a principal to a set of allowed operations on a path prefix.
+- **Least privilege by default**: new tokens have no capabilities unless a policy
+  explicitly grants them.
+- **Role separation**: administrative operations (unseal, policy management) require
+  a separate token with elevated capabilities.
+
+Export the full policy matrix at any time:
 
 ```bash
 egide policy export --format markdown
 ```
 
-## Compliance Checklist
+## Key lifecycle and rotation
 
-### Before Deployment
+The KMS and Transit engines manage cryptographic keys with versioning built in.
 
-- [ ] Choose compliant hosting location
-- [ ] Configure TLS certificates
-- [ ] Plan key ceremony
-- [ ] Define access policies
-- [ ] Set up audit log forwarding
+- Keys are never exported in plaintext. Applications request encrypt/decrypt/sign
+  operations; the key material never leaves the server.
+- Each key has an active version. Older versions are retained for decryption of
+  existing ciphertexts and can be revoked individually.
+- Rotation is manual (triggered by `egide kms rotate`) or scheduled via the API.
+- Key usage is recorded in the audit log, providing a complete history per key name.
 
-### During Operation
+## Defense in depth
 
-- [ ] Monitor audit logs
-- [ ] Rotate keys on schedule
-- [ ] Review access policies quarterly
-- [ ] Conduct access reviews
-- [ ] Test disaster recovery
+Egide layers multiple independent controls so that compromise of any single layer
+does not expose secret material:
 
-### For Audits
+1. **Sealed state at rest** - raw storage is unreadable without the unseal quorum.
+2. **Encrypted storage** - individual records are encrypted even within the database.
+3. **Authentication** - every API call requires a valid, non-expired token.
+4. **Authorization** - valid tokens are still subject to path-level policy checks.
+5. **Audit log** - all four layers produce tamper-evident log entries.
 
-- [ ] Export audit logs
-- [ ] Generate access reports
-- [ ] Document key management procedures
-- [ ] Provide policy documentation
-- [ ] Demonstrate encryption controls
+## Operational checklist
 
-## Compliance Limitations
+Before going to production, verify the following controls are in place:
 
-Egide helps with technical controls but does not address:
+- [ ] TLS certificates issued and auto-renewal configured
+- [ ] Unseal shares distributed to separate operators (minimum quorum required)
+- [ ] Audit log forwarding to durable storage configured
+- [ ] Retention period defined for audit logs
+- [ ] Access policies scoped to least privilege and peer-reviewed
+- [ ] Encryption at rest verified (storage backend, deployment region documented)
+- [ ] Key rotation schedule defined and tested
 
-- **Organizational policies**: You must create and enforce policies
-- **Physical security**: Protect your infrastructure
-- **Personnel security**: Background checks, training
-- **Business continuity**: Full DR planning
-- **Third-party risk**: Vendor management
+## Next steps
 
-## Next Steps
-
-- [Security Model](model.md): Technical security details
-- [Production Deployment](../guides/production.md): Secure deployment
+- [Security model](model.md): threat model and security guarantees
+- [Production deployment](../guides/production.md): secure deployment guide

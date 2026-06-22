@@ -7,5 +7,5 @@ context. It answers "why" questions rather than "how" questions.
 
 - [Architecture](../architecture/kms-engine.md): how the KMS engine is structured.
 - [Security model](../security/model.md): the threat model and security guarantees.
-- [Compliance](../security/compliance.md): GDPR, SOC 2 and ISO 27001 approach.
+- [Security controls](../security/compliance.md): data residency, audit trail, encryption, access control.
 - [Roadmap](roadmap.md): planned features and milestones.

@@ -47,7 +47,7 @@ Egide (from Greek *aegis*, the shield of Athena) is a unified server for managin
 ### Security
 
 - [Security Model](security/model.md): how Egide protects your data
-- [Compliance](security/compliance.md): GDPR, SOC 2 and ISO 27001 compliance
+- [Security controls](security/compliance.md): data residency, audit trail, encryption, access control
 
 ### Policies
 

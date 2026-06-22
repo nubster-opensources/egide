@@ -128,12 +128,12 @@ EGIDE_LOG_LEVEL=info
 - [ ] **Access logging** : Complete audit trail
 - [ ] **Data retention** : Policies defined and enforced
 
-### Regulatory
+### Security Controls
 
-- [ ] **GDPR compliance** : If handling EU data
-- [ ] **SOC 2 readiness** : Controls documented
-- [ ] **ISO 27001 alignment** : Security framework
-- [ ] **Industry specific** : PCI-DSS, HIPAA as applicable
+- [ ] **Audit log retention** : Retention period configured and tested
+- [ ] **Access controls reviewed** : Policies scoped to least privilege
+- [ ] **Encryption at rest verified** : Storage backend uses AES-256-GCM
+- [ ] **Data residency** : Deployment region chosen and documented
 
 ## Pre-Launch Verification
 
