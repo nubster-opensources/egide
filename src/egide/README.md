@@ -1,6 +1,6 @@
 # egide
 
-Sovereign KMS, Secrets Manager and Private CA written in Rust.
+Self-hosted KMS, Secrets Manager and Private CA written in Rust.
 
 This is the umbrella crate. It re-exports the Egide building blocks behind
 feature flags:

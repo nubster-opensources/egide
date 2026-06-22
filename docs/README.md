@@ -1,10 +1,10 @@
 # Egide Documentation
 
-Welcome to the official documentation for **Egide**, a sovereign secrets management, key management and PKI server.
+Welcome to the official documentation for **Egide**, a self-hosted secrets management, key management and PKI server.
 
 ## What is Egide?
 
-Egide (from Greek *aegis*, the shield of Athena) is a unified server for managing secrets, cryptographic keys and certificates. Built with security and data sovereignty in mind, Egide covers four engines:
+Egide (from Greek *aegis*, the shield of Athena) is a unified server for managing secrets, cryptographic keys and certificates. Built with security and data ownership in mind, Egide covers four engines:
 
 - **Secrets Engine**: secure storage for sensitive data with versioning and rotation
 - **KMS Engine**: cryptographic key management with encrypt and decrypt operations
@@ -49,11 +49,16 @@ Egide (from Greek *aegis*, the shield of Athena) is a unified server for managin
 - [Security Model](security/model.md): how Egide protects your data
 - [Compliance](security/compliance.md): GDPR, SOC 2 and ISO 27001 compliance
 
+### Policies
+
+- [MSRV Policy](MSRV_POLICY.md): minimum supported Rust version guarantees
+- [Semver Policy](SEMVER_POLICY.md): API stability and versioning conventions
+
 ## Quick Links
 
 - [GitHub Repository](https://github.com/nubster-opensources/egide)
-- [Docker Hub](https://hub.docker.com/r/nubster/egide)
 - [Report an Issue](https://github.com/nubster-opensources/egide/issues)
+- [Roadmap](../ROADMAP.md)
 
 ## License
 

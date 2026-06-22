@@ -190,7 +190,7 @@ Egide is designed to protect against:
 
 ### v1.0.0 - Production Ready
 
-**Goal**: Enterprise deployment with stable API.
+**Goal**: Stable, production-ready deployment with high availability.
 
 > ⚠️ **API Stability**: From v1.0.0, the REST API is considered stable. Breaking changes will only occur in major versions.
 
@@ -224,10 +224,10 @@ Egide is designed to protect against:
 #### Security (Production)
 
 - [ ] mTLS for cluster communication
-- [ ] Auto-seal with cloud KMS (AWS/GCP/Azure)
+- [ ] Auto-seal with cloud KMS backends
 - [ ] Security hardening guide
 - [ ] Penetration testing checklist
-- [ ] Compliance documentation (SOC2 preparation)
+- [ ] Compliance documentation
 
 ---
 

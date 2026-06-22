@@ -231,7 +231,7 @@ All operations are logged:
 
 ### Compliance Features
 
-- **GDPR**: Data sovereignty, audit trails, right to erasure
+- **GDPR**: Data residency, audit trails, right to erasure
 - **SOC 2**: Access controls, audit logging, encryption
 - **ISO 27001**: Security controls, documentation
 
