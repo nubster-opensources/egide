@@ -28,6 +28,7 @@ pub struct ServiceTokenRecord {
 ///
 /// Returns `None` if the prefix is missing, the separator is absent, or either
 /// part is empty.
+#[must_use]
 pub fn parse_token(token: &str) -> Option<(String, String)> {
     let rest = token.strip_prefix(SERVICE_TOKEN_PREFIX)?;
     let (id, secret) = rest.split_once('.')?;
@@ -38,11 +39,13 @@ pub fn parse_token(token: &str) -> Option<(String, String)> {
 }
 
 /// Formats a service token from its identifier and secret.
+#[must_use]
 pub fn format_token(token_id: &str, secret: &str) -> String {
     format!("{SERVICE_TOKEN_PREFIX}{token_id}.{secret}")
 }
 
 /// Computes the hex-encoded SHA-256 hash of a token secret.
+#[must_use]
 pub fn hash_secret(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
 }
@@ -161,8 +164,7 @@ impl ServiceTokenStore {
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Authentication backend validating native service tokens.
@@ -172,6 +174,7 @@ pub struct ServiceTokenBackend {
 
 impl ServiceTokenBackend {
     /// Creates a new backend over the given store.
+    #[must_use]
     pub fn new(store: ServiceTokenStore) -> Self {
         Self { store }
     }

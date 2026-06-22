@@ -18,7 +18,7 @@ use egide_api::ServiceContext;
 ///
 /// Useful for testing open endpoints (Status, Init, Unseal) that operate
 /// before the vault is initialized.
-pub async fn sealed_context() -> (tempfile::TempDir, Arc<ServiceContext>) {
+pub(crate) async fn sealed_context() -> (tempfile::TempDir, Arc<ServiceContext>) {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let seal_manager = SealManager::new(tmp.path()).await.expect("seal manager");
 
@@ -47,7 +47,8 @@ pub async fn sealed_context() -> (tempfile::TempDir, Arc<ServiceContext>) {
 ///
 /// Both secrets and transit engines are started. The root token can be used
 /// directly as a bearer in gRPC request metadata.
-pub async fn unsealed_context_with_token() -> (tempfile::TempDir, Arc<ServiceContext>, String) {
+pub(crate) async fn unsealed_context_with_token() -> (tempfile::TempDir, Arc<ServiceContext>, String)
+{
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let mut seal_manager = SealManager::new(tmp.path()).await.expect("seal manager");
     let init = seal_manager
@@ -94,7 +95,7 @@ pub async fn unsealed_context_with_token() -> (tempfile::TempDir, Arc<ServiceCon
 ///
 /// Returns `(tempdir, TransitGrpc, service_token_string)` so tests can verify
 /// that non-root callers are rejected from root-only RPCs.
-pub async fn unsealed_context_with_service_token(
+pub(crate) async fn unsealed_context_with_service_token(
 ) -> (tempfile::TempDir, Arc<egide_api::ServiceContext>, String) {
     let (tmp, ctx, _root) = unsealed_context_with_token().await;
     let (_, svc_token) = ctx

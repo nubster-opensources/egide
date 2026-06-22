@@ -91,6 +91,19 @@ tonic-build = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"
+
 [profile.release]
 lto = true
 codegen-units = 1

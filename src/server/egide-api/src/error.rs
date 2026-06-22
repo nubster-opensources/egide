@@ -22,7 +22,7 @@ pub enum ServiceError {
     /// Vault is sealed; the required engine is unavailable.
     #[error("sealed")]
     Sealed,
-    /// Decryption failed (kept distinct for intent; mapped like BadRequest, anti-oracle).
+    /// Decryption failed (kept distinct for intent; mapped like `BadRequest`, anti-oracle).
     #[error("decryption failed")]
     DecryptionFailed,
     /// Unexpected engine or storage failure.

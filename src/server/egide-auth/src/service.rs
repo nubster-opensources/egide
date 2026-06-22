@@ -15,6 +15,7 @@ pub struct AuthService {
 
 impl AuthService {
     /// Creates a new auth service with the given backends.
+    #[must_use]
     pub fn new(backends: Vec<Box<dyn AuthBackend>>) -> Self {
         Self { backends }
     }
@@ -33,7 +34,6 @@ impl AuthService {
                 },
                 Err(_) => {
                     // Try next backend
-                    continue;
                 },
             }
         }

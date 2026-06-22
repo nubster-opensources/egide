@@ -11,7 +11,6 @@
 //! - Certificate revocation (CRL)
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod error;
 

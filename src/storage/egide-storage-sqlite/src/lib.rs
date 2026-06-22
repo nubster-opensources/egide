@@ -1,10 +1,9 @@
-//! # Egide Storage - SQLite Backend
+//! # Egide Storage - `SQLite` Backend
 //!
-//! SQLite implementation of the storage backend with tenant isolation.
+//! `SQLite` implementation of the storage backend with tenant isolation.
 //! Each tenant gets its own database file for maximum security.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +13,7 @@ use tracing::{debug, info};
 
 use egide_storage::{StorageBackend, StorageError};
 
-/// SQLite storage backend with tenant isolation.
+/// `SQLite` storage backend with tenant isolation.
 ///
 /// Each tenant gets its own database file at `{base_path}/{tenant}.db`.
 /// This ensures complete data isolation between tenants.
@@ -27,7 +26,7 @@ pub struct SqliteBackend {
 }
 
 impl SqliteBackend {
-    /// Opens or creates a SQLite database for a tenant.
+    /// Opens or creates a `SQLite` database for a tenant.
     ///
     /// # Arguments
     ///
@@ -76,6 +75,7 @@ impl SqliteBackend {
     ///
     /// Returns a new instance with the actor set. All operations
     /// performed with this instance will be logged with this actor.
+    #[must_use]
     pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
         self.actor = Some(actor.into());
         self
@@ -111,7 +111,7 @@ impl SqliteBackend {
         debug!("Running database migrations");
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS kv_store (
                 key        TEXT PRIMARY KEY,
                 value      BLOB NOT NULL,
@@ -119,14 +119,14 @@ impl SqliteBackend {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS kv_history (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 key        TEXT NOT NULL,
@@ -136,7 +136,7 @@ impl SqliteBackend {
                 actor      TEXT,
                 timestamp  INTEGER NOT NULL
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
@@ -162,10 +162,12 @@ impl SqliteBackend {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time before UNIX epoch")
-            .as_secs() as i64
+            .as_secs()
+            .cast_signed()
     }
 
     /// Returns the current actor, if set.
+    #[must_use]
     pub fn current_actor(&self) -> Option<String> {
         self.actor.clone()
     }
@@ -252,14 +254,14 @@ impl StorageBackend for SqliteBackend {
         };
 
         sqlx::query(
-            r#"
+            r"
             INSERT INTO kv_store (key, value, version, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 version = excluded.version,
                 updated_at = excluded.updated_at
-            "#,
+            ",
         )
         .bind(key)
         .bind(value)

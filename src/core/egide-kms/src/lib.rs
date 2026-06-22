@@ -11,7 +11,6 @@
 //! - Key policies and access control
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod error;
 

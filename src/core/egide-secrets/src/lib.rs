@@ -11,7 +11,6 @@
 //! - Per-secret encryption with derived keys
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod error;
 
@@ -30,7 +29,7 @@ pub use error::SecretsError;
 const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v1:";
 
 /// SQL schema for secrets tables.
-const SCHEMA: &str = r#"
+const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS secrets (
     path        TEXT PRIMARY KEY,
     version     INTEGER NOT NULL DEFAULT 1,
@@ -52,7 +51,7 @@ CREATE TABLE IF NOT EXISTS secret_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_secret_versions_path ON secret_versions(path);
-"#;
+";
 
 /// A decrypted secret with its data and metadata.
 #[derive(Debug, Clone)]
@@ -104,7 +103,7 @@ pub struct SecretsEngine {
 }
 
 impl SecretsEngine {
-    /// Creates a new SecretsEngine with the given storage path and master key.
+    /// Creates a new `SecretsEngine` with the given storage path and master key.
     pub async fn new(
         data_path: impl AsRef<Path>,
         tenant: &str,
@@ -133,7 +132,7 @@ impl SecretsEngine {
 
     /// Derives an encryption key for a specific secret path.
     fn derive_secret_key(&self, path: &str) -> Result<egide_crypto::SymmetricKey, SecretsError> {
-        let info = format!("{}{}", SECRET_KEY_INFO_PREFIX, path);
+        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}");
         let key_bytes = kdf::derive_key(self.master_key.as_bytes(), None, info.as_bytes(), 32)?;
         egide_crypto::SymmetricKey::from_bytes(&key_bytes).map_err(SecretsError::from)
     }
@@ -146,7 +145,7 @@ impl SecretsEngine {
     ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
         let key = self.derive_secret_key(path)?;
         let plaintext = serde_json::to_vec(data)
-            .map_err(|e| SecretsError::Crypto(format!("serialization failed: {}", e)))?;
+            .map_err(|e| SecretsError::Crypto(format!("serialization failed: {e}")))?;
 
         let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(path.as_bytes()))?;
 
@@ -174,7 +173,7 @@ impl SecretsEngine {
         let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(path.as_bytes()))?;
 
         serde_json::from_slice(&plaintext)
-            .map_err(|e| SecretsError::Crypto(format!("deserialization failed: {}", e)))
+            .map_err(|e| SecretsError::Crypto(format!("deserialization failed: {e}")))
     }
 
     /// Validates a secret path.
@@ -230,7 +229,7 @@ impl SecretsEngine {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
-            .map_err(|e| SecretsError::Storage(format!("metadata serialization failed: {}", e)))?;
+            .map_err(|e| SecretsError::Storage(format!("metadata serialization failed: {e}")))?;
 
         // Check if secret exists
         let existing = self
@@ -250,7 +249,7 @@ impl SecretsEngine {
                 return Err(SecretsError::Deleted(path.to_string()));
             }
 
-            let current_version = current_version as u32;
+            let current_version = u32::try_from(current_version).unwrap_or(0);
 
             // Check CAS if provided
             if let Some(expected) = options.cas {
@@ -268,7 +267,7 @@ impl SecretsEngine {
             self.storage
                 .execute(
                     "UPDATE secrets SET version = ?, updated_at = ? WHERE path = ?",
-                    &[&(new_version as i64).to_string(), &now.to_string(), path],
+                    &[&i64::from(new_version).to_string(), &now.to_string(), path],
                 )
                 .await
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
@@ -334,7 +333,8 @@ impl SecretsEngine {
             return Err(SecretsError::Deleted(path.to_string()));
         }
 
-        self.get_version(path, version as u32).await
+        self.get_version(path, u32::try_from(version).unwrap_or(0))
+            .await
     }
 
     /// Retrieves a specific version of a secret.
@@ -387,9 +387,9 @@ impl SecretsEngine {
 
         // Decrypt data
         let data_bytes = hex_decode(&data_hex)
-            .map_err(|e| SecretsError::Storage(format!("invalid data encoding: {}", e)))?;
+            .map_err(|e| SecretsError::Storage(format!("invalid data encoding: {e}")))?;
         let nonce_bytes = hex_decode(&nonce_hex)
-            .map_err(|e| SecretsError::Storage(format!("invalid nonce encoding: {}", e)))?;
+            .map_err(|e| SecretsError::Storage(format!("invalid nonce encoding: {e}")))?;
 
         let data = self.decrypt_data(path, &data_bytes, &nonce_bytes)?;
 
@@ -398,7 +398,7 @@ impl SecretsEngine {
         } else {
             Some(
                 serde_json::from_str(&metadata_json)
-                    .map_err(|e| SecretsError::Storage(format!("invalid metadata: {}", e)))?,
+                    .map_err(|e| SecretsError::Storage(format!("invalid metadata: {e}")))?,
             )
         };
 
@@ -477,7 +477,7 @@ impl SecretsEngine {
 
     /// Lists secrets matching a prefix.
     pub async fn list(&self, prefix: &str) -> Result<Vec<SecretMetadata>, SecretsError> {
-        let pattern = format!("{}%", prefix);
+        let pattern = format!("{prefix}%");
         let rows = self
             .storage
             .query_all::<(String, String, String, String, String)>(
@@ -541,7 +541,7 @@ impl SecretsEngine {
                     } else {
                         expires_at_str.parse().ok()
                     };
-                    let expired = expires_at.map(|e| e < now).unwrap_or(false);
+                    let expired = expires_at.is_some_and(|e| e < now);
                     SecretVersionInfo {
                         version,
                         created_at,
@@ -597,7 +597,8 @@ impl SecretsEngine {
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
 
-        let count = paths.len() as u32;
+        // Secret count is bounded in practice; saturate at u32::MAX if somehow exceeded.
+        let count = u32::try_from(paths.len()).unwrap_or(u32::MAX);
 
         for (path,) in paths {
             // Delete versions first

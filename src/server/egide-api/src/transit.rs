@@ -39,8 +39,9 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         TransitError::InvalidCiphertext => {
             ServiceError::BadRequest("invalid ciphertext format".into())
         },
-        TransitError::InvalidKeyName(msg) => ServiceError::BadRequest(msg),
-        TransitError::InvalidKeyType(msg) => ServiceError::BadRequest(msg),
+        TransitError::InvalidKeyName(msg) | TransitError::InvalidKeyType(msg) => {
+            ServiceError::BadRequest(msg)
+        },
         TransitError::VersionBelowMinEncryption { version, min } => ServiceError::BadRequest(
             format!("key version {version} is below min_encryption_version {min}"),
         ),
@@ -48,11 +49,10 @@ fn map_transit_error(err: TransitError) -> ServiceError {
             format!("key version {version} is below min_decryption_version {min}"),
         ),
         TransitError::DecryptionFailed => ServiceError::DecryptionFailed,
-        TransitError::OperationNotAllowed(msg) => ServiceError::Forbidden(msg),
-        TransitError::NotExportable(msg) => ServiceError::Forbidden(msg),
-        TransitError::DeletionNotAllowed(msg) => ServiceError::Forbidden(msg),
-        TransitError::Storage(msg) => ServiceError::Internal(msg),
-        TransitError::Crypto(msg) => ServiceError::Internal(msg),
+        TransitError::OperationNotAllowed(msg)
+        | TransitError::NotExportable(msg)
+        | TransitError::DeletionNotAllowed(msg) => ServiceError::Forbidden(msg),
+        TransitError::Storage(msg) | TransitError::Crypto(msg) => ServiceError::Internal(msg),
     }
 }
 
@@ -373,6 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn decrypt_tampered_ciphertext_is_decryption_failed() {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
         let (_t, c) = crate::test_support::unsealed_context().await;
         c.create_key(&AuthContext::root(), "tamper-key", "aes256-gcm", false)
             .await
@@ -381,7 +382,6 @@ mod tests {
 
         // Flip bits in the base64 payload to produce a valid-format but
         // AEAD-authentication-failing ciphertext.
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
         let parts: Vec<&str> = ct.splitn(3, ':').collect();
         let mut bytes = BASE64.decode(parts[2]).unwrap();
         bytes[0] ^= 0xFF;

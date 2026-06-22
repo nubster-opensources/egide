@@ -7,6 +7,7 @@ use tonic::Status;
 ///
 /// The mapping mirrors the HTTP status choices made by the REST handlers so
 /// that both transports behave consistently from the client's perspective.
+#[must_use]
 pub fn to_status(e: ServiceError) -> Status {
     match e {
         ServiceError::NotFound => Status::not_found("not found"),

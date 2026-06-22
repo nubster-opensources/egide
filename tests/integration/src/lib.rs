@@ -18,60 +18,87 @@ use tempfile::TempDir;
 // API Types
 // ============================================================================
 
+/// Response body from `GET /v1/sys/health`.
 #[derive(Debug, Deserialize)]
 pub struct HealthResponse {
+    /// Current status of the server (e.g. "ok").
     pub status: String,
+    /// Server version string.
     pub version: String,
+    /// Whether the vault has been initialized.
     pub initialized: bool,
+    /// Whether the vault is currently sealed.
     pub sealed: bool,
 }
 
+/// Request body for `POST /v1/sys/init`.
 #[derive(Debug, Serialize)]
 pub struct InitRequest {
+    /// Number of key shares to generate.
     pub secret_shares: u8,
+    /// Minimum shares required to unseal.
     pub secret_threshold: u8,
 }
 
+/// Response body from `POST /v1/sys/init`.
 #[derive(Debug, Deserialize)]
 pub struct InitResponse {
+    /// Root token granting full access.
     pub root_token: String,
+    /// Shamir key shares (hex-encoded).
     pub keys: Vec<String>,
 }
 
+/// Request body for `POST /v1/sys/unseal`.
 #[derive(Debug, Serialize)]
 pub struct UnsealRequest {
+    /// A single Shamir key share (hex-encoded).
     pub key: String,
 }
 
+/// Response body from `POST /v1/sys/unseal`.
 #[derive(Debug, Deserialize)]
 pub struct UnsealResponse {
+    /// Whether the vault is still sealed after this operation.
     pub sealed: bool,
+    /// Number of shares required to unseal.
     pub threshold: u8,
+    /// Number of shares received so far.
     pub progress: u8,
 }
 
+/// Request body for `PUT /v1/secrets/{path}`.
 #[derive(Debug, Serialize)]
 pub struct SecretPutRequest {
+    /// Key-value pairs to store at the given path.
     pub data: HashMap<String, String>,
 }
 
+/// Response body from `GET /v1/secrets/{path}`.
 #[derive(Debug, Deserialize)]
 pub struct SecretResponse {
+    /// Key-value pairs stored at the requested path.
     pub data: HashMap<String, String>,
 }
 
+/// Response body from `PUT /v1/secrets/{path}`.
 #[derive(Debug, Deserialize)]
 pub struct SecretWriteResponse {
+    /// Version number after the write.
     pub version: u32,
 }
 
+/// Response body from `GET /v1/secrets` (list).
 #[derive(Debug, Deserialize)]
 pub struct SecretListResponse {
+    /// Secret paths available to the caller.
     pub keys: Vec<String>,
 }
 
+/// Response body from `POST /v1/sys/seal`.
 #[derive(Debug, Deserialize)]
 pub struct SealResponse {
+    /// Whether the vault is sealed after this operation.
     pub sealed: bool,
 }
 
@@ -82,7 +109,9 @@ pub struct SealResponse {
 /// A test server instance that manages its own data directory and process.
 pub struct TestServer {
     process: Child,
+    /// Base URL of the running server (e.g. `http://127.0.0.1:18200`).
     pub base_url: String,
+    /// TCP port the server is listening on.
     pub port: u16,
     _data_dir: TempDir,
 }
@@ -100,13 +129,13 @@ impl TestServer {
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(format!("127.0.0.1:{port}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .with_context(|| format!("Failed to start server: {:?}", server_binary))?;
+            .with_context(|| format!("Failed to start server: {}", server_binary.display()))?;
 
-        let base_url = format!("http://127.0.0.1:{}", port);
+        let base_url = format!("http://127.0.0.1:{port}");
 
         let server = Self {
             process,
@@ -149,6 +178,7 @@ impl TestServer {
     }
 
     /// Get a configured HTTP client for this server.
+    #[must_use]
     pub fn client(&self) -> EgideClient {
         EgideClient::new(&self.base_url)
     }
@@ -180,8 +210,7 @@ fn find_server_binary() -> Result<std::path::PathBuf> {
     }
 
     bail!(
-        "Could not find egide-server binary. Run 'cargo build -p egide-server' first. Searched in: {:?}",
-        candidates
+        "Could not find egide-server binary. Run 'cargo build -p egide-server' first. Searched in: {candidates:?}"
     )
 }
 
@@ -197,6 +226,8 @@ pub struct EgideClient {
 }
 
 impl EgideClient {
+    /// Creates a new client targeting the given base URL.
+    #[must_use]
     pub fn new(base_url: &str) -> Self {
         Self {
             client: Client::builder()
@@ -208,6 +239,8 @@ impl EgideClient {
         }
     }
 
+    /// Returns a new client with the given bearer token set.
+    #[must_use]
     pub fn with_token(mut self, token: &str) -> Self {
         self.token = Some(token.to_string());
         self
@@ -217,11 +250,13 @@ impl EgideClient {
         format!("{}{}", self.base_url, path)
     }
 
+    /// Calls `GET /v1/sys/health` and returns the parsed response.
     pub async fn health(&self) -> Result<HealthResponse> {
         let resp = self.client.get(self.url("/v1/sys/health")).send().await?;
         Ok(resp.json().await?)
     }
 
+    /// Calls `POST /v1/sys/init` to initialize the vault with Shamir parameters.
     pub async fn init(&self, shares: u8, threshold: u8) -> Result<InitResponse> {
         let req = InitRequest {
             secret_shares: shares,
@@ -239,6 +274,7 @@ impl EgideClient {
         Ok(resp.json().await?)
     }
 
+    /// Calls `POST /v1/sys/unseal` with one Shamir key share.
     pub async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
         let req = UnsealRequest {
             key: key.to_string(),
@@ -255,10 +291,11 @@ impl EgideClient {
         Ok(resp.json().await?)
     }
 
+    /// Calls `POST /v1/sys/seal` to seal the vault.
     pub async fn seal(&self) -> Result<()> {
         let mut req = self.client.post(self.url("/v1/sys/seal"));
         if let Some(token) = &self.token {
-            req = req.header("Authorization", format!("Bearer {}", token));
+            req = req.header("Authorization", format!("Bearer {token}"));
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
@@ -267,29 +304,30 @@ impl EgideClient {
         Ok(())
     }
 
-    /// Posts to /v1/sys/seal and returns the raw HTTP status code.
+    /// Posts to `/v1/sys/seal` and returns the raw HTTP status code.
     ///
     /// Used in authentication tests to assert 401/403 without panicking.
     pub async fn seal_raw(&self) -> Result<u16> {
         let mut req = self.client.post(self.url("/v1/sys/seal"));
         if let Some(token) = &self.token {
-            req = req.header("Authorization", format!("Bearer {}", token));
+            req = req.header("Authorization", format!("Bearer {token}"));
         }
         let resp = req.send().await?;
         Ok(resp.status().as_u16())
     }
 
-    /// Posts to /v1/sys/seal with an explicit token override and returns the raw HTTP status code.
+    /// Posts to `/v1/sys/seal` with an explicit token override and returns the raw HTTP status code.
     pub async fn seal_raw_with_token(&self, token: &str) -> Result<u16> {
         let resp = self
             .client
             .post(self.url("/v1/sys/seal"))
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
         Ok(resp.status().as_u16())
     }
 
+    /// Calls `PUT /v1/secrets/{path}` to store key-value data.
     pub async fn secret_put(
         &self,
         path: &str,
@@ -299,8 +337,8 @@ impl EgideClient {
         let req = SecretPutRequest { data };
         let resp = self
             .client
-            .put(self.url(&format!("/v1/secrets/{}", path)))
-            .header("Authorization", format!("Bearer {}", token))
+            .put(self.url(&format!("/v1/secrets/{path}")))
+            .header("Authorization", format!("Bearer {token}"))
             .json(&req)
             .send()
             .await?;
@@ -310,12 +348,13 @@ impl EgideClient {
         Ok(resp.json().await?)
     }
 
+    /// Calls `GET /v1/secrets/{path}` to retrieve stored key-value data.
     pub async fn secret_get(&self, path: &str) -> Result<SecretResponse> {
         let token = self.token.as_ref().context("Token required")?;
         let resp = self
             .client
-            .get(self.url(&format!("/v1/secrets/{}", path)))
-            .header("Authorization", format!("Bearer {}", token))
+            .get(self.url(&format!("/v1/secrets/{path}")))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -324,12 +363,13 @@ impl EgideClient {
         Ok(resp.json().await?)
     }
 
+    /// Calls `DELETE /v1/secrets/{path}` to remove a secret.
     pub async fn secret_delete(&self, path: &str) -> Result<()> {
         let token = self.token.as_ref().context("Token required")?;
         let resp = self
             .client
-            .delete(self.url(&format!("/v1/secrets/{}", path)))
-            .header("Authorization", format!("Bearer {}", token))
+            .delete(self.url(&format!("/v1/secrets/{path}")))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -338,12 +378,13 @@ impl EgideClient {
         Ok(())
     }
 
+    /// Calls `GET /v1/secrets` to list available secret paths.
     pub async fn secret_list(&self) -> Result<SecretListResponse> {
         let token = self.token.as_ref().context("Token required")?;
         let resp = self
             .client
             .get(self.url("/v1/secrets"))
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -412,13 +453,13 @@ mod tests {
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(format!("127.0.0.1:{port}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let base_url = format!("http://127.0.0.1:{}", port);
+        let base_url = format!("http://127.0.0.1:{port}");
         let client = EgideClient::new(&base_url);
 
         // Wait for server to be ready (robust wait with retries)
@@ -535,7 +576,7 @@ mod tests {
     ///
     /// Before the fix this endpoint has no authentication, so it returns 200.
     /// The test documents the expected behaviour and will be RED until the fix
-    /// is applied to seal_handler.
+    /// is applied to `seal_handler`.
     #[tokio::test]
     async fn test_seal_requires_token_missing_returns_401() {
         let port = next_port();
@@ -546,13 +587,13 @@ mod tests {
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(format!("127.0.0.1:{port}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let base_url = format!("http://127.0.0.1:{}", port);
+        let base_url = format!("http://127.0.0.1:{port}");
         let client = EgideClient::new(&base_url);
 
         // Wait for server
@@ -572,8 +613,7 @@ mod tests {
         let status = client.seal_raw().await.unwrap();
         assert_eq!(
             status, 401,
-            "seal without token must return 401, got {}",
-            status
+            "seal without token must return 401, got {status}"
         );
 
         let _ = process.kill();
@@ -591,13 +631,13 @@ mod tests {
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(format!("127.0.0.1:{port}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let base_url = format!("http://127.0.0.1:{}", port);
+        let base_url = format!("http://127.0.0.1:{port}");
         let client = EgideClient::new(&base_url);
 
         for _ in 0..50 {
@@ -618,8 +658,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             status, 401,
-            "seal with invalid token must return 401, got {}",
-            status
+            "seal with invalid token must return 401, got {status}"
         );
 
         let _ = process.kill();
@@ -637,13 +676,13 @@ mod tests {
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(format!("127.0.0.1:{port}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let base_url = format!("http://127.0.0.1:{}", port);
+        let base_url = format!("http://127.0.0.1:{port}");
         let client = EgideClient::new(&base_url);
 
         for _ in 0..50 {
@@ -662,8 +701,7 @@ mod tests {
         let status = authed_client.seal_raw().await.unwrap();
         assert_eq!(
             status, 200,
-            "seal with root token must return 200, got {}",
-            status
+            "seal with root token must return 200, got {status}"
         );
 
         let _ = process.kill();

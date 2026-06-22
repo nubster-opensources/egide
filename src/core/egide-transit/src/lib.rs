@@ -16,7 +16,6 @@
 //! This allows the engine to determine which key version to use for decryption.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod error;
 
@@ -36,7 +35,7 @@ use egide_storage_sqlite::SqliteBackend;
 // SQL Schema
 // ============================================================================
 
-const SCHEMA: &str = r#"
+const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS transit_keys (
     name            TEXT PRIMARY KEY,
     key_type        TEXT NOT NULL,
@@ -63,7 +62,7 @@ CREATE TABLE IF NOT EXISTS transit_key_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_transit_key_versions_name ON transit_key_versions(name);
-"#;
+";
 
 // ============================================================================
 // Types
@@ -102,6 +101,9 @@ impl FromStr for KeyType {
 }
 
 /// Configuration for creating a new transit key.
+// Each bool maps to a distinct, independently togglable capability flag; a state machine would
+// add indirection without clarifying intent here.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
 pub struct KeyConfig {
     /// Key type (default: AES-256-GCM).
@@ -119,7 +121,8 @@ pub struct KeyConfig {
 }
 
 impl KeyConfig {
-    /// Creates a new KeyConfig with sensible defaults.
+    /// Creates a new `KeyConfig` with sensible defaults.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             key_type: KeyType::default(),
@@ -133,6 +136,9 @@ impl KeyConfig {
 }
 
 /// Metadata about a transit key.
+// Each bool maps to a distinct, independently togglable capability; refactoring into enums
+// would mirror the same information with more boilerplate and no semantic gain.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitKey {
     /// Key name.
@@ -184,7 +190,12 @@ pub struct DataKey {
 // ============================================================================
 
 fn hex_encode(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{:02x}", b)).collect()
+    use std::fmt::Write as _;
+    data.iter()
+        .fold(String::with_capacity(data.len() * 2), |mut s, b| {
+            write!(s, "{b:02x}").expect("writing to String is infallible");
+            s
+        })
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, TransitError> {
@@ -213,7 +224,7 @@ pub struct TransitEngine {
 }
 
 impl TransitEngine {
-    /// Creates a new TransitEngine with the given storage path and master key.
+    /// Creates a new `TransitEngine` with the given storage path and master key.
     pub async fn new(
         data_path: impl AsRef<Path>,
         master_key: MasterKey,
@@ -242,7 +253,7 @@ impl TransitEngine {
 
     /// Derives a unique encryption key for a transit key version.
     fn derive_version_key(&self, name: &str, version: u32) -> Result<[u8; 32], TransitError> {
-        let info = format!("egide-transit-v1:{}:{}", name, version);
+        let info = format!("egide-transit-v1:{name}:{version}");
         let key = kdf::derive_encryption_key(self.master_key.as_bytes(), info.as_bytes())?;
         Ok(*key)
     }
@@ -255,7 +266,7 @@ impl TransitEngine {
         key: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), TransitError> {
         let wrapping_key = self.derive_version_key(name, version)?;
-        let aad = format!("transit-key:{}:{}", name, version);
+        let aad = format!("transit-key:{name}:{version}");
         let ciphertext = aead::encrypt(&wrapping_key, key, Some(aad.as_bytes()))?;
 
         // Split nonce (first 12 bytes) from ciphertext
@@ -274,7 +285,7 @@ impl TransitEngine {
         nonce: &[u8],
     ) -> Result<Vec<u8>, TransitError> {
         let wrapping_key = self.derive_version_key(name, version)?;
-        let aad = format!("transit-key:{}:{}", name, version);
+        let aad = format!("transit-key:{name}:{version}");
 
         // Reconstruct ciphertext with nonce prefix
         let mut ciphertext = Vec::with_capacity(nonce.len() + encrypted.len());
@@ -378,11 +389,11 @@ impl TransitEngine {
                 &[
                     name,
                     &config.key_type.to_string(),
-                    &(config.supports_encryption as i32).to_string(),
-                    &(config.supports_decryption as i32).to_string(),
-                    &(config.supports_derivation as i32).to_string(),
-                    &(config.exportable as i32).to_string(),
-                    &(config.deletion_allowed as i32).to_string(),
+                    &i32::from(config.supports_encryption).to_string(),
+                    &i32::from(config.supports_decryption).to_string(),
+                    &i32::from(config.supports_derivation).to_string(),
+                    &i32::from(config.exportable).to_string(),
+                    &i32::from(config.deletion_allowed).to_string(),
                     &now.to_string(),
                     &now.to_string(),
                 ],
@@ -609,7 +620,7 @@ impl TransitEngine {
                 &[
                     &min_enc.to_string(),
                     &min_dec.to_string(),
-                    &(del as i32).to_string(),
+                    &i32::from(del).to_string(),
                     &now.to_string(),
                     name,
                 ],
@@ -675,12 +686,12 @@ impl TransitEngine {
         let raw_key = self.get_key_material(name, version).await?;
 
         // Encrypt with AAD containing key name for domain separation
-        let aad = format!("egide-transit:{}:{}", name, version);
+        let aad = format!("egide-transit:{name}:{version}");
         let ciphertext = aead::encrypt(&raw_key, plaintext, Some(aad.as_bytes()))?;
 
         // Format: egide:v{version}:{base64}
         let encoded = BASE64.encode(&ciphertext);
-        Ok(format!("egide:v{}:{}", version, encoded))
+        Ok(format!("egide:v{version}:{encoded}"))
     }
 
     /// Decrypts ciphertext.
@@ -709,7 +720,7 @@ impl TransitEngine {
         let raw_key = self.get_key_material(name, version).await?;
 
         // Decrypt with AAD
-        let aad = format!("egide-transit:{}:{}", name, version);
+        let aad = format!("egide-transit:{name}:{version}");
         let decrypted = aead::decrypt(&raw_key, &data, Some(aad.as_bytes()))
             .map_err(|_| TransitError::DecryptionFailed)?;
         Ok(decrypted.to_vec())
@@ -897,6 +908,8 @@ mod tests {
             .await
             .unwrap();
 
+        // i % 256 is always in [0, 255]; the cast is intentionally safe.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let plaintext: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
         let ciphertext = engine.encrypt("large-key", &plaintext).await.unwrap();
         let decrypted = engine.decrypt("large-key", &ciphertext).await.unwrap();
@@ -1655,7 +1668,7 @@ mod tests {
         // Encrypt many items "concurrently" (sequential in test but simulates load)
         let mut ciphertexts = Vec::new();
         for i in 0..100 {
-            let data = format!("message-{}", i);
+            let data = format!("message-{i}");
             let ct = engine.encrypt("concurrent", data.as_bytes()).await.unwrap();
             ciphertexts.push((data, ct));
         }

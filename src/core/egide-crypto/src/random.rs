@@ -10,6 +10,7 @@ use crate::aead::{KEY_SIZE, NONCE_SIZE};
 /// Generates a cryptographically secure random 256-bit key.
 ///
 /// The key is wrapped in `Zeroizing` to ensure it is cleared from memory when dropped.
+#[must_use]
 pub fn generate_key() -> Zeroizing<[u8; KEY_SIZE]> {
     let mut key = Zeroizing::new([0u8; KEY_SIZE]);
     OsRng.fill_bytes(&mut *key);
@@ -17,6 +18,7 @@ pub fn generate_key() -> Zeroizing<[u8; KEY_SIZE]> {
 }
 
 /// Generates a cryptographically secure random nonce for AES-GCM.
+#[must_use]
 pub fn generate_nonce() -> [u8; NONCE_SIZE] {
     let mut nonce = [0u8; NONCE_SIZE];
     OsRng.fill_bytes(&mut nonce);
@@ -28,6 +30,7 @@ pub fn generate_nonce() -> [u8; NONCE_SIZE] {
 /// # Arguments
 ///
 /// * `len` - Number of random bytes to generate
+#[must_use]
 pub fn generate_bytes(len: usize) -> Vec<u8> {
     let mut bytes = vec![0u8; len];
     OsRng.fill_bytes(&mut bytes);
@@ -39,6 +42,7 @@ pub fn generate_bytes(len: usize) -> Vec<u8> {
 /// # Arguments
 ///
 /// * `byte_len` - Number of random bytes (output string will be 2x this length)
+#[must_use]
 pub fn generate_token(byte_len: usize) -> String {
     let bytes = generate_bytes(byte_len);
     hex_encode(&bytes)
