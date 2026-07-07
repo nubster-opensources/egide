@@ -175,7 +175,7 @@ impl SqliteBackend {
     /// Executes raw SQL statements (for migrations/schema creation).
     pub async fn execute_raw(&self, sql: &str) -> Result<(), StorageError> {
         for statement in sql.split(';').filter(|s| !s.trim().is_empty()) {
-            sqlx::query(statement.trim())
+            sqlx::query(sqlx::AssertSqlSafe(statement.trim()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
@@ -185,7 +185,7 @@ impl SqliteBackend {
 
     /// Executes a SQL statement with parameters.
     pub async fn execute(&self, sql: &str, params: &[&str]) -> Result<(), StorageError> {
-        let mut query = sqlx::query(sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for param in params {
             query = query.bind(*param);
         }
@@ -201,7 +201,7 @@ impl SqliteBackend {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
     {
-        let mut query = sqlx::query_as::<_, T>(sql);
+        let mut query = sqlx::query_as::<_, T>(sqlx::AssertSqlSafe(sql));
         for param in params {
             query = query.bind(*param);
         }
@@ -216,7 +216,7 @@ impl SqliteBackend {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
     {
-        let mut query = sqlx::query_as::<_, T>(sql);
+        let mut query = sqlx::query_as::<_, T>(sqlx::AssertSqlSafe(sql));
         for param in params {
             query = query.bind(*param);
         }

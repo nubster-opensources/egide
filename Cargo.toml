@@ -33,7 +33,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 authors = ["Nubster <contact@nubster.com>"]
 repository = "https://github.com/nubster-opensources/egide"
@@ -58,7 +58,7 @@ blahaj = "0.6"
 argon2 = "0.5"
 
 # Database
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

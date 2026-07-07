@@ -228,8 +228,7 @@ impl SealManager {
         );
 
         // Generate master key
-        let master_key =
-            MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
+        let master_key = MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
 
         // Compute HMAC for master key verification
         let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
@@ -398,8 +397,7 @@ impl SealManager {
         warn!("⚠️  ENABLING DEV MODE - NOT FOR PRODUCTION ⚠️");
 
         // Generate and store master key in plaintext
-        let master_key =
-            MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
+        let master_key = MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
 
         // Compute HMAC for master key verification (consistency with initialize)
         let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
