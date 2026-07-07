@@ -31,7 +31,7 @@ jobs:
 
       - name: Build only (verify, credentials absent)
         if: env.HAS_REGISTRY_CREDENTIALS != 'true'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -40,7 +40,7 @@ jobs:
 
       - name: Build and push (latest)
         if: env.HAS_REGISTRY_CREDENTIALS == 'true' && github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -50,7 +50,7 @@ jobs:
 
       - name: Build and push (release)
         if: env.HAS_REGISTRY_CREDENTIALS == 'true' && startsWith(github.ref, 'refs/tags/v')
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
