@@ -670,7 +670,7 @@ mod tests {
 
     async fn setup() -> (TempDir, SecretsEngine) {
         let tmp = TempDir::new().unwrap();
-        let master_key = MasterKey::generate();
+        let master_key = MasterKey::generate().unwrap();
         let engine = SecretsEngine::new(tmp.path(), "test", master_key)
             .await
             .unwrap();
@@ -981,8 +981,8 @@ mod tests {
         // Two engines with different master keys should not be able to read each other's secrets
         let tmp = TempDir::new().unwrap();
 
-        let key1 = MasterKey::generate();
-        let key2 = MasterKey::generate();
+        let key1 = MasterKey::generate().unwrap();
+        let key2 = MasterKey::generate().unwrap();
 
         // Engine 1 writes a secret
         {

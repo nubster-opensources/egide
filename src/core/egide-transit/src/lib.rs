@@ -379,7 +379,7 @@ impl TransitEngine {
         let now = Self::now();
 
         // Generate initial key material (32 bytes for AES-256 or ChaCha20)
-        let raw_key = random::generate_key();
+        let raw_key = random::generate_key()?;
         let (encrypted_key, nonce) = self.encrypt_key_material(name, 1, raw_key.as_ref())?;
 
         // Insert key metadata
@@ -523,7 +523,7 @@ impl TransitEngine {
         let now = Self::now();
 
         // Generate new key material
-        let raw_key = random::generate_key();
+        let raw_key = random::generate_key()?;
         let (encrypted_key, nonce) =
             self.encrypt_key_material(name, new_version, raw_key.as_ref())?;
 
@@ -785,7 +785,7 @@ impl TransitEngine {
         }
 
         // Generate a random 32-byte key
-        let plaintext_key = random::generate_key();
+        let plaintext_key = random::generate_key()?;
 
         // Wrap it with the transit key
         let wrapped = self.encrypt(name, plaintext_key.as_ref()).await?;
@@ -818,7 +818,7 @@ mod tests {
 
     async fn setup() -> (TempDir, TransitEngine) {
         let tmp = TempDir::new().unwrap();
-        let master_key = MasterKey::generate();
+        let master_key = MasterKey::generate().unwrap();
         let engine = TransitEngine::new(tmp.path(), master_key).await.unwrap();
         (tmp, engine)
     }
@@ -1590,7 +1590,7 @@ mod tests {
     #[tokio::test]
     async fn test_persistence_across_restart() {
         let tmp = TempDir::new().unwrap();
-        let master_key = MasterKey::generate();
+        let master_key = MasterKey::generate().unwrap();
         let master_key_bytes = master_key.as_bytes().to_vec();
 
         // First session: create key and encrypt
@@ -1633,7 +1633,7 @@ mod tests {
 
         // First session: create and encrypt
         let ciphertext = {
-            let master_key1 = MasterKey::generate();
+            let master_key1 = MasterKey::generate().unwrap();
             let engine = TransitEngine::new(tmp.path(), master_key1).await.unwrap();
             engine
                 .create_key("wrong-mk", KeyConfig::new())
@@ -1644,7 +1644,7 @@ mod tests {
 
         // Second session: different master key
         {
-            let master_key2 = MasterKey::generate(); // Different key!
+            let master_key2 = MasterKey::generate().unwrap(); // Different key!
             let engine2 = TransitEngine::new(tmp.path(), master_key2).await.unwrap();
 
             // Key metadata exists but decryption should fail

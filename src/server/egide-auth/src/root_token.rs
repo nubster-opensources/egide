@@ -70,9 +70,11 @@ impl<S: StorageBackend + 'static> AuthBackend for RootTokenBackend<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+    use argon2::{
+        password_hash::{rand_core::OsRng, SaltString},
+        Argon2, PasswordHasher,
+    };
     use egide_storage::StorageError;
-    use rand::rngs::OsRng;
     use std::collections::HashMap;
     use tokio::sync::RwLock;
 

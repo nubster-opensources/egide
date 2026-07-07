@@ -20,10 +20,14 @@ pub struct SymmetricKey {
 
 impl SymmetricKey {
     /// Generates a new random symmetric key.
-    #[must_use]
-    pub fn generate() -> Self {
-        let key = generate_key();
-        Self { bytes: *key }
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CryptoError::RandomGenerationFailed`] if the operating
+    /// system's CSPRNG fails to produce output.
+    pub fn generate() -> Result<Self, CryptoError> {
+        let key = generate_key()?;
+        Ok(Self { bytes: *key })
     }
 
     /// Creates a symmetric key from raw bytes.
@@ -75,10 +79,14 @@ pub struct MasterKey {
 
 impl MasterKey {
     /// Generates a new random master key.
-    #[must_use]
-    pub fn generate() -> Self {
-        let key = generate_key();
-        Self { bytes: *key }
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CryptoError::RandomGenerationFailed`] if the operating
+    /// system's CSPRNG fails to produce output.
+    pub fn generate() -> Result<Self, CryptoError> {
+        let key = generate_key()?;
+        Ok(Self { bytes: *key })
     }
 
     /// Creates a master key from raw bytes.
@@ -124,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_symmetric_key_generate() {
-        let key = SymmetricKey::generate();
+        let key = SymmetricKey::generate().unwrap();
         assert_eq!(key.as_bytes().len(), KEY_SIZE);
     }
 
@@ -144,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_symmetric_key_debug_redacted() {
-        let key = SymmetricKey::generate();
+        let key = SymmetricKey::generate().unwrap();
         let debug_str = format!("{key:?}");
         assert!(debug_str.contains("[REDACTED]"));
         assert!(!debug_str.contains("42"));
@@ -152,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_master_key_generate() {
-        let key = MasterKey::generate();
+        let key = MasterKey::generate().unwrap();
         assert_eq!(key.as_bytes().len(), KEY_SIZE);
     }
 
@@ -165,15 +173,15 @@ mod tests {
 
     #[test]
     fn test_master_key_debug_redacted() {
-        let key = MasterKey::generate();
+        let key = MasterKey::generate().unwrap();
         let debug_str = format!("{key:?}");
         assert!(debug_str.contains("[REDACTED]"));
     }
 
     #[test]
     fn test_keys_are_unique() {
-        let key1 = SymmetricKey::generate();
-        let key2 = SymmetricKey::generate();
+        let key1 = SymmetricKey::generate().unwrap();
+        let key2 = SymmetricKey::generate().unwrap();
         assert_ne!(key1.as_bytes(), key2.as_bytes());
     }
 }
