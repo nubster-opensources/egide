@@ -51,7 +51,7 @@ pub fn encrypt(
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
-    let nonce_bytes = generate_nonce();
+    let nonce_bytes = generate_nonce()?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = match associated_data {
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         let plaintext = b"Hello, Egide!";
 
         let ciphertext = encrypt(&*key, plaintext, None).unwrap();
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_with_aad() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         let plaintext = b"secret data";
         let aad = b"additional authenticated data";
 
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_decrypt_wrong_aad_fails() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         let plaintext = b"secret data";
         let aad = b"correct aad";
         let wrong_aad = b"wrong aad";
@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn test_decrypt_wrong_key_fails() {
-        let key1 = generate_key();
-        let key2 = generate_key();
+        let key1 = generate_key().unwrap();
+        let key2 = generate_key().unwrap();
         let plaintext = b"secret data";
 
         let ciphertext = encrypt(&*key1, plaintext, None).unwrap();
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_ciphertext_format() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         let plaintext = b"test";
 
         let ciphertext = encrypt(&*key, plaintext, None).unwrap();
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_tampered_ciphertext_fails() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         let plaintext = b"secret data";
 
         let mut ciphertext = encrypt(&*key, plaintext, None).unwrap();

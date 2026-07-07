@@ -55,7 +55,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use egide_storage::StorageBackend;
-use rand::RngCore;
+use rand::Rng;
 use subtle::ConstantTimeEq;
 
 use crate::{AuthBackend, AuthContext, AuthError, AuthMethod};
@@ -79,11 +79,11 @@ impl ServiceTokenStore {
     /// Creates a new service token for `service_name`.
     pub async fn create(&self, service_name: &str) -> Result<(String, String), AuthError> {
         let mut id_bytes = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut id_bytes);
+        rand::rng().fill_bytes(&mut id_bytes);
         let token_id = hex::encode(id_bytes);
 
         let mut secret_bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut secret_bytes);
+        rand::rng().fill_bytes(&mut secret_bytes);
         let secret = hex::encode(secret_bytes);
 
         let record = ServiceTokenRecord {

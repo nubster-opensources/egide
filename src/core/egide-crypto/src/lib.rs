@@ -19,7 +19,7 @@
 //! use egide_crypto::{aead, keys::SymmetricKey};
 //!
 //! // Generate a key and encrypt some data
-//! let key = SymmetricKey::generate();
+//! let key = SymmetricKey::generate().unwrap();
 //! let plaintext = b"secret message";
 //!
 //! let ciphertext = aead::encrypt(key.as_bytes(), plaintext, None).unwrap();

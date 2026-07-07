@@ -32,4 +32,8 @@ pub enum CryptoError {
     /// Invalid input data.
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    /// The system random number generator failed to produce output.
+    #[error("random number generator failed: {0}")]
+    RandomGenerationFailed(String),
 }

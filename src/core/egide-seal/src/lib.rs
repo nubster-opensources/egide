@@ -23,7 +23,7 @@ use argon2::{
     Argon2,
 };
 use blahaj::{Share as SharkShare, Sharks};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
@@ -228,7 +228,7 @@ impl SealManager {
         );
 
         // Generate master key
-        let master_key = MasterKey::generate();
+        let master_key = MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
 
         // Compute HMAC for master key verification
         let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
@@ -250,7 +250,7 @@ impl SealManager {
             .collect();
 
         // Generate root token
-        let root_token = generate_token(32);
+        let root_token = generate_token(32)?;
         let root_token_hash = hash_token(&root_token)?;
 
         // Store configuration
@@ -397,13 +397,13 @@ impl SealManager {
         warn!("⚠️  ENABLING DEV MODE - NOT FOR PRODUCTION ⚠️");
 
         // Generate and store master key in plaintext
-        let master_key = MasterKey::generate();
+        let master_key = MasterKey::generate().map_err(|e| SealError::Crypto(e.to_string()))?;
 
         // Compute HMAC for master key verification (consistency with initialize)
         let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
 
         // Generate root token
-        let root_token = generate_token(32);
+        let root_token = generate_token(32)?;
         let root_token_hash = hash_token(&root_token)?;
 
         let now = current_unix_secs()?;
@@ -479,11 +479,16 @@ fn compute_master_key_hmac(master_key: &[u8]) -> Result<Vec<u8>, SealError> {
 }
 
 /// Generates a random token as hex string.
-fn generate_token(bytes: usize) -> String {
-    use rand::RngCore;
+///
+/// Returns a [`SealError::Crypto`] if the operating system's CSPRNG fails
+/// to produce output.
+fn generate_token(bytes: usize) -> Result<String, SealError> {
+    use rand::TryRng;
     let mut buf = Zeroizing::new(vec![0u8; bytes]);
-    rand::rngs::OsRng.fill_bytes(&mut buf);
-    hex_encode(&buf)
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut buf)
+        .map_err(|e| SealError::Crypto(e.to_string()))?;
+    Ok(hex_encode(&buf))
 }
 
 /// Hashes a token with Argon2id.

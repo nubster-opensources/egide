@@ -108,12 +108,15 @@ impl PostgresBackend {
     ///
     /// Creates the tenant schema and all required tables if they do not exist.
     async fn migrate(&self) -> Result<(), StorageError> {
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.tenant))
-            .execute(&self.pool)
-            .await
-            .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE SCHEMA IF NOT EXISTS \"{}\"",
+            self.tenant
+        )))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
             CREATE TABLE IF NOT EXISTS "{}".kv_store (
                 key        TEXT PRIMARY KEY,
@@ -124,12 +127,12 @@ impl PostgresBackend {
             )
             "#,
             self.tenant
-        ))
+        )))
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
             CREATE TABLE IF NOT EXISTS "{}".kv_history (
                 id         BIGSERIAL PRIMARY KEY,
@@ -142,23 +145,23 @@ impl PostgresBackend {
             )
             "#,
             self.tenant
-        ))
+        )))
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE INDEX IF NOT EXISTS idx_history_key ON \"{}\".kv_history (key)",
             self.tenant
-        ))
+        )))
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE INDEX IF NOT EXISTS idx_history_timestamp ON \"{}\".kv_history (timestamp)",
             self.tenant
-        ))
+        )))
         .execute(&self.pool)
         .await
         .map_err(|e| StorageError::ConnectionFailed(format!("migration failed: {e}")))?;
@@ -186,7 +189,7 @@ impl StorageBackend for PostgresBackend {
             self.tenant
         );
 
-        let row: Option<(Vec<u8>,)> = sqlx::query_as(&sql)
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -202,7 +205,7 @@ impl StorageBackend for PostgresBackend {
             "SELECT version FROM \"{}\".kv_store WHERE key = $1",
             self.tenant
         );
-        let existing: Option<(i64,)> = sqlx::query_as(&select_sql)
+        let existing: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(select_sql))
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -224,7 +227,7 @@ impl StorageBackend for PostgresBackend {
             "#,
             self.tenant
         );
-        sqlx::query(&upsert_sql)
+        sqlx::query(sqlx::AssertSqlSafe(upsert_sql))
             .bind(key)
             .bind(value)
             .bind(version)
@@ -238,7 +241,7 @@ impl StorageBackend for PostgresBackend {
             "INSERT INTO \"{}\".kv_history (key, value, version, operation, actor, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
             self.tenant
         );
-        sqlx::query(&history_sql)
+        sqlx::query(sqlx::AssertSqlSafe(history_sql))
             .bind(key)
             .bind(value)
             .bind(version)
@@ -257,7 +260,7 @@ impl StorageBackend for PostgresBackend {
             "SELECT version FROM \"{}\".kv_store WHERE key = $1",
             self.tenant
         );
-        let existing: Option<(i64,)> = sqlx::query_as(&select_sql)
+        let existing: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(select_sql))
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -267,7 +270,7 @@ impl StorageBackend for PostgresBackend {
             let now = Self::now();
 
             let delete_sql = format!("DELETE FROM \"{}\".kv_store WHERE key = $1", self.tenant);
-            sqlx::query(&delete_sql)
+            sqlx::query(sqlx::AssertSqlSafe(delete_sql))
                 .bind(key)
                 .execute(&self.pool)
                 .await
@@ -277,7 +280,7 @@ impl StorageBackend for PostgresBackend {
                 "INSERT INTO \"{}\".kv_history (key, value, version, operation, actor, timestamp) VALUES ($1, NULL, $2, 'delete', $3, $4)",
                 self.tenant
             );
-            sqlx::query(&history_sql)
+            sqlx::query(sqlx::AssertSqlSafe(history_sql))
                 .bind(key)
                 .bind(version + 1)
                 .bind(self.actor.as_deref())
@@ -297,7 +300,7 @@ impl StorageBackend for PostgresBackend {
             self.tenant
         );
 
-        let rows: Vec<(String,)> = sqlx::query_as(&sql)
+        let rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(&pattern)
             .fetch_all(&self.pool)
             .await

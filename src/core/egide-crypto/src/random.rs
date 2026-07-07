@@ -2,27 +2,44 @@
 //!
 //! Uses the operating system's CSPRNG for all random number generation.
 
-use rand::{rngs::OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand::TryRng;
 use zeroize::Zeroizing;
 
 use crate::aead::{KEY_SIZE, NONCE_SIZE};
+use crate::error::CryptoError;
+
+/// Fills `dest` with bytes from the operating system's CSPRNG.
+fn fill_random(dest: &mut [u8]) -> Result<(), CryptoError> {
+    SysRng
+        .try_fill_bytes(dest)
+        .map_err(|e| CryptoError::RandomGenerationFailed(e.to_string()))
+}
 
 /// Generates a cryptographically secure random 256-bit key.
 ///
 /// The key is wrapped in `Zeroizing` to ensure it is cleared from memory when dropped.
-#[must_use]
-pub fn generate_key() -> Zeroizing<[u8; KEY_SIZE]> {
+///
+/// # Errors
+///
+/// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
+/// CSPRNG fails to produce output.
+pub fn generate_key() -> Result<Zeroizing<[u8; KEY_SIZE]>, CryptoError> {
     let mut key = Zeroizing::new([0u8; KEY_SIZE]);
-    OsRng.fill_bytes(&mut *key);
-    key
+    fill_random(&mut *key)?;
+    Ok(key)
 }
 
 /// Generates a cryptographically secure random nonce for AES-GCM.
-#[must_use]
-pub fn generate_nonce() -> [u8; NONCE_SIZE] {
+///
+/// # Errors
+///
+/// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
+/// CSPRNG fails to produce output.
+pub fn generate_nonce() -> Result<[u8; NONCE_SIZE], CryptoError> {
     let mut nonce = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
+    fill_random(&mut nonce)?;
+    Ok(nonce)
 }
 
 /// Generates cryptographically secure random bytes.
@@ -30,11 +47,15 @@ pub fn generate_nonce() -> [u8; NONCE_SIZE] {
 /// # Arguments
 ///
 /// * `len` - Number of random bytes to generate
-#[must_use]
-pub fn generate_bytes(len: usize) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
+/// CSPRNG fails to produce output.
+pub fn generate_bytes(len: usize) -> Result<Vec<u8>, CryptoError> {
     let mut bytes = vec![0u8; len];
-    OsRng.fill_bytes(&mut bytes);
-    bytes
+    fill_random(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Generates a cryptographically secure random token as a hex string.
@@ -42,10 +63,14 @@ pub fn generate_bytes(len: usize) -> Vec<u8> {
 /// # Arguments
 ///
 /// * `byte_len` - Number of random bytes (output string will be 2x this length)
-#[must_use]
-pub fn generate_token(byte_len: usize) -> String {
-    let bytes = generate_bytes(byte_len);
-    hex_encode(&bytes)
+///
+/// # Errors
+///
+/// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
+/// CSPRNG fails to produce output.
+pub fn generate_token(byte_len: usize) -> Result<String, CryptoError> {
+    let bytes = generate_bytes(byte_len)?;
+    Ok(hex_encode(&bytes))
 }
 
 /// Encodes bytes as lowercase hexadecimal.
@@ -67,40 +92,40 @@ mod tests {
 
     #[test]
     fn test_generate_key_length() {
-        let key = generate_key();
+        let key = generate_key().unwrap();
         assert_eq!(key.len(), KEY_SIZE);
     }
 
     #[test]
     fn test_generate_key_unique() {
-        let key1 = generate_key();
-        let key2 = generate_key();
+        let key1 = generate_key().unwrap();
+        let key2 = generate_key().unwrap();
         assert_ne!(*key1, *key2);
     }
 
     #[test]
     fn test_generate_nonce_length() {
-        let nonce = generate_nonce();
+        let nonce = generate_nonce().unwrap();
         assert_eq!(nonce.len(), NONCE_SIZE);
     }
 
     #[test]
     fn test_generate_bytes_length() {
         for len in [0, 1, 16, 32, 64, 128] {
-            let bytes = generate_bytes(len);
+            let bytes = generate_bytes(len).unwrap();
             assert_eq!(bytes.len(), len);
         }
     }
 
     #[test]
     fn test_generate_token_length() {
-        let token = generate_token(16);
+        let token = generate_token(16).unwrap();
         assert_eq!(token.len(), 32);
     }
 
     #[test]
     fn test_generate_token_hex_format() {
-        let token = generate_token(16);
+        let token = generate_token(16).unwrap();
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -108,7 +133,7 @@ mod tests {
     fn test_randomness_distribution() {
         let mut seen = HashSet::new();
         for _ in 0..100 {
-            let token = generate_token(8);
+            let token = generate_token(8).unwrap();
             assert!(seen.insert(token), "duplicate token generated");
         }
     }
