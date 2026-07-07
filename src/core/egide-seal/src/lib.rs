@@ -23,7 +23,7 @@ use argon2::{
     Argon2,
 };
 use blahaj::{Share as SharkShare, Sharks};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
