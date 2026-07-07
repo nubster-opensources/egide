@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Upgraded the RustCrypto digest family to the 0.11 generation (hmac 0.13, sha2 0.11, hkdf 0.13)
+- Upgraded rand to 0.10; key, nonce and token generation now surface CSPRNG failures as `CryptoError::RandomGenerationFailed` instead of aborting
+- Upgraded sqlx to 0.9; dynamic SQL statements are explicitly marked with `AssertSqlSafe` after audit
+- Raised the MSRV from Rust 1.88 to Rust 1.94, required by sqlx 0.9
+
 ## [0.1.0] - 2026-06-15
 
 First public release. Egide provides a self-hosted KMS, Secrets Manager and
