@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Secrets engine: the AES-256-GCM key is now derived per secret version
+  (HKDF domain `egide-secrets-v2:{path}:{version}`) and the AEAD associated
+  data binds `path:version`, eliminating the GCM random-nonce birthday bound
+  on rotated secrets and blocking cross-version ciphertext splicing.
+  Breaking at-rest format change: data written by earlier development builds
+  is no longer decryptable.
+
 ### Changed
 - Upgraded the RustCrypto digest family to the 0.11 generation (hmac 0.13, sha2 0.11, hkdf 0.13)
 - Upgraded rand to 0.10; key, nonce and token generation now surface CSPRNG failures as `CryptoError::RandomGenerationFailed` instead of aborting

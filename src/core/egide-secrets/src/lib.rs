@@ -9,6 +9,25 @@
 //! - Soft delete with recovery
 //! - Check-and-set (CAS) for optimistic locking
 //! - Per-secret encryption with derived keys
+//!
+//! ## Encryption scheme
+//!
+//! Secret data is encrypted with AES-256-GCM under a key derived per
+//! `(path, version)` pair: HKDF-SHA256 over the master key with
+//! `info = "egide-secrets-v2:{path}:{version}"`. Each version row is inserted
+//! exactly once, so at most one ciphertext is ever persisted per derived key;
+//! the rare transient encryptions under a reused derivation context (CAS
+//! races, purge then re-create) stay far below the NIST SP 800-38D bound on
+//! random 96-bit nonces (2^32 messages per key), regardless of rotation rate.
+//!
+//! The AEAD associated data is `"egide-secrets:{path}:{version}"`, sealing
+//! each ciphertext to its storage coordinates: moving or swapping encrypted
+//! blobs between rows fails authentication.
+//!
+//! Alternatives considered and rejected: XChaCha20-Poly1305 (larger nonce
+//! but a new dependency, divergence from the AES-256-GCM doctrine used
+//! elsewhere, and no protection against cross-version splicing on its own)
+//! and deterministic counter nonces (fragile under concurrency and retries).
 
 #![forbid(unsafe_code)]
 
@@ -26,7 +45,14 @@ use egide_storage_sqlite::SqliteBackend;
 pub use error::SecretsError;
 
 /// Domain separation for secret encryption keys.
-const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v1:";
+///
+/// The `v2` bump binds the secret version into the derivation, giving one
+/// key per `(path, version)` pair. Ciphertexts written under the `v1`
+/// scheme (path-only derivation) are deliberately not decryptable.
+const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v2:";
+
+/// Domain separation for the AEAD associated data.
+const SECRET_AAD_PREFIX: &str = "egide-secrets:";
 
 /// SQL schema for secrets tables.
 const SCHEMA: &str = r"
@@ -130,24 +156,39 @@ impl SecretsEngine {
         Ok(())
     }
 
-    /// Derives an encryption key for a specific secret path.
-    fn derive_secret_key(&self, path: &str) -> Result<egide_crypto::SymmetricKey, SecretsError> {
-        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}");
+    /// Derives an encryption key for one version of a secret.
+    ///
+    /// Each `(path, version)` pair yields a distinct key, so every derived
+    /// key encrypts exactly one message and the random-nonce birthday bound
+    /// of AES-GCM can never be approached.
+    fn derive_secret_key(
+        &self,
+        path: &str,
+        version: u32,
+    ) -> Result<egide_crypto::SymmetricKey, SecretsError> {
+        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}:{version}");
         let key_bytes = kdf::derive_key(self.master_key.as_bytes(), None, info.as_bytes(), 32)?;
         egide_crypto::SymmetricKey::from_bytes(&key_bytes).map_err(SecretsError::from)
+    }
+
+    /// Builds the AEAD associated data sealing a ciphertext to its row.
+    fn secret_aad(path: &str, version: u32) -> String {
+        format!("{SECRET_AAD_PREFIX}{path}:{version}")
     }
 
     /// Encrypts secret data for storage.
     fn encrypt_data(
         &self,
         path: &str,
+        version: u32,
         data: &HashMap<String, String>,
     ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
-        let key = self.derive_secret_key(path)?;
+        let key = self.derive_secret_key(path, version)?;
         let plaintext = serde_json::to_vec(data)
             .map_err(|e| SecretsError::Crypto(format!("serialization failed: {e}")))?;
 
-        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(path.as_bytes()))?;
+        let aad = Self::secret_aad(path, version);
+        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(aad.as_bytes()))?;
 
         // Extract nonce from ciphertext (first 12 bytes in our format)
         let nonce = ciphertext[..12].to_vec();
@@ -160,17 +201,19 @@ impl SecretsEngine {
     fn decrypt_data(
         &self,
         path: &str,
+        version: u32,
         data: &[u8],
         nonce: &[u8],
     ) -> Result<HashMap<String, String>, SecretsError> {
-        let key = self.derive_secret_key(path)?;
+        let key = self.derive_secret_key(path, version)?;
 
         // Reconstruct ciphertext with nonce prefix
         let mut ciphertext = Vec::with_capacity(nonce.len() + data.len());
         ciphertext.extend_from_slice(nonce);
         ciphertext.extend_from_slice(data);
 
-        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(path.as_bytes()))?;
+        let aad = Self::secret_aad(path, version);
+        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(aad.as_bytes()))?;
 
         serde_json::from_slice(&plaintext)
             .map_err(|e| SecretsError::Crypto(format!("deserialization failed: {e}")))
@@ -290,7 +333,7 @@ impl SecretsEngine {
         }
 
         // Encrypt and store version data
-        let (encrypted_data, nonce) = self.encrypt_data(path, &data)?;
+        let (encrypted_data, nonce) = self.encrypt_data(path, new_version, &data)?;
 
         self.storage
             .execute(
@@ -391,7 +434,7 @@ impl SecretsEngine {
         let nonce_bytes = hex_decode(&nonce_hex)
             .map_err(|e| SecretsError::Storage(format!("invalid nonce encoding: {e}")))?;
 
-        let data = self.decrypt_data(path, &data_bytes, &nonce_bytes)?;
+        let data = self.decrypt_data(path, version, &data_bytes, &nonce_bytes)?;
 
         let metadata = if metadata_json.is_empty() {
             None
@@ -1008,6 +1051,137 @@ mod tests {
             let engine1 = SecretsEngine::new(tmp.path(), "test", key1).await.unwrap();
             let secret = engine1.get("shared/path").await.unwrap();
             assert_eq!(secret.data.get("username").unwrap(), "admin");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_swapped_version_blobs_fail_decryption() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/spliced", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        let mut data2 = test_data();
+        data2.insert("password".to_string(), "rotated".to_string());
+        engine
+            .put("app/spliced", data2, PutOptions::default())
+            .await
+            .unwrap();
+
+        let (data_v1, nonce_v1) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/spliced"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (data_v2, nonce_v2) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 2",
+                &["app/spliced"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Swap the encrypted blobs underneath the engine, simulating an
+        // attacker with direct storage access.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 1",
+                &[&data_v2, &nonce_v2, "app/spliced"],
+            )
+            .await
+            .unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 2",
+                &[&data_v1, &nonce_v1, "app/spliced"],
+            )
+            .await
+            .unwrap();
+
+        let result_v1 = engine.get_version("app/spliced", 1).await;
+        assert!(matches!(result_v1, Err(SecretsError::Crypto(_))));
+        let result_v2 = engine.get_version("app/spliced", 2).await;
+        assert!(matches!(result_v2, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_replayed_blob_under_other_version_fails() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/replayed", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        let mut data2 = test_data();
+        data2.insert("password".to_string(), "rotated".to_string());
+        engine
+            .put("app/replayed", data2, PutOptions::default())
+            .await
+            .unwrap();
+
+        let (data_v1, nonce_v1) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/replayed"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Replay version 1's blob in version 2's row: a rollback forged at
+        // the storage layer must not authenticate.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 2",
+                &[&data_v1, &nonce_v1, "app/replayed"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_version("app/replayed", 2).await;
+        assert!(matches!(result, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_derived_keys_differ_across_versions_and_paths() {
+        let (_tmp, engine) = setup().await;
+
+        let key_v1 = engine.derive_secret_key("app/kdf", 1).unwrap();
+        let key_v2 = engine.derive_secret_key("app/kdf", 2).unwrap();
+        let key_other_path = engine.derive_secret_key("app/kdf-other", 1).unwrap();
+
+        assert_ne!(key_v1.as_bytes(), key_v2.as_bytes());
+        assert_ne!(key_v1.as_bytes(), key_other_path.as_bytes());
+        assert_ne!(key_v2.as_bytes(), key_other_path.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_many_rotations_all_versions_decrypt() {
+        let (_tmp, engine) = setup().await;
+
+        for i in 1..=50u32 {
+            let mut data = HashMap::new();
+            data.insert("counter".to_string(), i.to_string());
+            engine
+                .put("app/rotated", data, PutOptions::default())
+                .await
+                .unwrap();
+        }
+
+        for i in 1..=50u32 {
+            let secret = engine.get_version("app/rotated", i).await.unwrap();
+            assert_eq!(secret.data.get("counter").unwrap(), &i.to_string());
         }
     }
 }
