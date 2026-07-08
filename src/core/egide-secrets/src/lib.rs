@@ -26,7 +26,14 @@ use egide_storage_sqlite::SqliteBackend;
 pub use error::SecretsError;
 
 /// Domain separation for secret encryption keys.
-const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v1:";
+///
+/// The `v2` bump binds the secret version into the derivation, giving one
+/// key per `(path, version)` pair. Ciphertexts written under the `v1`
+/// scheme (path-only derivation) are deliberately not decryptable.
+const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v2:";
+
+/// Domain separation for the AEAD associated data.
+const SECRET_AAD_PREFIX: &str = "egide-secrets:";
 
 /// SQL schema for secrets tables.
 const SCHEMA: &str = r"
@@ -130,24 +137,39 @@ impl SecretsEngine {
         Ok(())
     }
 
-    /// Derives an encryption key for a specific secret path.
-    fn derive_secret_key(&self, path: &str) -> Result<egide_crypto::SymmetricKey, SecretsError> {
-        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}");
+    /// Derives an encryption key for one version of a secret.
+    ///
+    /// Each `(path, version)` pair yields a distinct key, so every derived
+    /// key encrypts exactly one message and the random-nonce birthday bound
+    /// of AES-GCM can never be approached.
+    fn derive_secret_key(
+        &self,
+        path: &str,
+        version: u32,
+    ) -> Result<egide_crypto::SymmetricKey, SecretsError> {
+        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}:{version}");
         let key_bytes = kdf::derive_key(self.master_key.as_bytes(), None, info.as_bytes(), 32)?;
         egide_crypto::SymmetricKey::from_bytes(&key_bytes).map_err(SecretsError::from)
+    }
+
+    /// Builds the AEAD associated data sealing a ciphertext to its row.
+    fn secret_aad(path: &str, version: u32) -> String {
+        format!("{SECRET_AAD_PREFIX}{path}:{version}")
     }
 
     /// Encrypts secret data for storage.
     fn encrypt_data(
         &self,
         path: &str,
+        version: u32,
         data: &HashMap<String, String>,
     ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
-        let key = self.derive_secret_key(path)?;
+        let key = self.derive_secret_key(path, version)?;
         let plaintext = serde_json::to_vec(data)
             .map_err(|e| SecretsError::Crypto(format!("serialization failed: {e}")))?;
 
-        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(path.as_bytes()))?;
+        let aad = Self::secret_aad(path, version);
+        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(aad.as_bytes()))?;
 
         // Extract nonce from ciphertext (first 12 bytes in our format)
         let nonce = ciphertext[..12].to_vec();
@@ -160,17 +182,19 @@ impl SecretsEngine {
     fn decrypt_data(
         &self,
         path: &str,
+        version: u32,
         data: &[u8],
         nonce: &[u8],
     ) -> Result<HashMap<String, String>, SecretsError> {
-        let key = self.derive_secret_key(path)?;
+        let key = self.derive_secret_key(path, version)?;
 
         // Reconstruct ciphertext with nonce prefix
         let mut ciphertext = Vec::with_capacity(nonce.len() + data.len());
         ciphertext.extend_from_slice(nonce);
         ciphertext.extend_from_slice(data);
 
-        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(path.as_bytes()))?;
+        let aad = Self::secret_aad(path, version);
+        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(aad.as_bytes()))?;
 
         serde_json::from_slice(&plaintext)
             .map_err(|e| SecretsError::Crypto(format!("deserialization failed: {e}")))
@@ -290,7 +314,7 @@ impl SecretsEngine {
         }
 
         // Encrypt and store version data
-        let (encrypted_data, nonce) = self.encrypt_data(path, &data)?;
+        let (encrypted_data, nonce) = self.encrypt_data(path, new_version, &data)?;
 
         self.storage
             .execute(
@@ -391,7 +415,7 @@ impl SecretsEngine {
         let nonce_bytes = hex_decode(&nonce_hex)
             .map_err(|e| SecretsError::Storage(format!("invalid nonce encoding: {e}")))?;
 
-        let data = self.decrypt_data(path, &data_bytes, &nonce_bytes)?;
+        let data = self.decrypt_data(path, version, &data_bytes, &nonce_bytes)?;
 
         let metadata = if metadata_json.is_empty() {
             None
