@@ -106,13 +106,13 @@ Service tokens can read and write secrets but cannot manage other tokens or perf
 - **Keys never leave the server.** Applications call Transit to encrypt and decrypt. The key material stays inside Egide, sealed at rest. Sign and verify operations are planned with the KMS engine.
 - **Sealed by default.** The master key is split with Shamir secret sharing. A fresh or restarted server is sealed and serves nothing until a quorum of operators unseals it.
 - **Self-hostable.** Run it on your own infrastructure. An append-only, signed audit log is planned for 0.2.0.
-- **No lock-in.** Plain REST and gRPC over TLS, hierarchical paths, YAML policies. Nothing proprietary to adopt on the client side.
+- **No lock-in.** Plain REST and gRPC APIs, hierarchical paths. TLS is terminated at your reverse proxy today (server-side TLS is planned), and YAML policies are planned. Nothing proprietary to adopt on the client side.
 
 ## What Egide is not
 
 - **Not a general-purpose secret store for end users.** Egide is designed for infrastructure and application secrets, not password managers.
 - **Not a managed service.** There is no hosted Egide; you run and operate it yourself.
-- **Not a complete IAM solution.** It handles authentication tokens and YAML policies but does not replace a full identity provider.
+- **Not a complete IAM solution.** It handles authentication tokens (YAML policies are planned) but does not replace a full identity provider.
 
 ## Workspace
 
@@ -127,7 +127,7 @@ Service tokens can read and write secrets but cannot manage other tokens or perf
 | `egide-storage` | Storage backend abstraction (async trait) |
 | `egide-storage-sqlite` | SQLite storage backend |
 | `egide-storage-postgres` | PostgreSQL storage backend |
-| `egide-auth` | Authentication and policy framework |
+| `egide-auth` | Authentication framework (root and service tokens; policies planned) |
 | `egide-api` | REST and gRPC API layer |
 | `egide-server` | Server daemon: configuration, wiring, bootstrap |
 | `egide-cli` | `egide` command-line client |

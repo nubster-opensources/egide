@@ -1,6 +1,107 @@
 # Transit API
 
-The Transit API provides Encryption as a Service endpoints.
+The Transit API provides Encryption as a Service endpoints. All endpoints require a bearer token (`Authorization: Bearer <token>`) and return `503` while the vault is sealed. Key management operations (create, delete, rotate) are root-only; data operations are open to any authenticated token.
+
+Responses are flat JSON objects (no `data` envelope). Errors are RFC 9457 `application/problem+json` documents.
+
+## Create Key
+
+Create a named encryption key. Root-only.
+
+```http
+POST /v1/transit/keys
+```
+
+### Request
+
+```json
+{
+  "name": "payments-key",
+  "type": "aes256-gcm",
+  "deletion_allowed": false
+}
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Key name (required) |
+| `type` | string | `aes256-gcm` (default) or `chacha20-poly1305` |
+| `deletion_allowed` | boolean | Whether the key may later be deleted (default: false) |
+
+### Response
+
+`201 Created`:
+
+```json
+{
+  "name": "payments-key",
+  "type": "aes256-gcm",
+  "latest_version": 1
+}
+```
+
+## List Keys
+
+```http
+GET /v1/transit/keys
+```
+
+### List Keys Response
+
+```json
+{
+  "keys": ["payments-key", "pii-key"]
+}
+```
+
+## Get Key
+
+```http
+GET /v1/transit/keys/:key_name
+```
+
+### Get Key Response
+
+```json
+{
+  "name": "payments-key",
+  "type": "aes256-gcm",
+  "latest_version": 2,
+  "min_encryption_version": 1,
+  "min_decryption_version": 1,
+  "supports_encryption": true,
+  "supports_decryption": true,
+  "deletion_allowed": false
+}
+```
+
+## Delete Key
+
+Root-only. The key must have been created with `deletion_allowed: true`, otherwise the call returns `403`.
+
+```http
+DELETE /v1/transit/keys/:key_name
+```
+
+Returns `204 No Content` on success.
+
+## Rotate Key
+
+Rotate a key to a new version. Root-only. Older versions remain available for decryption.
+
+```http
+POST /v1/transit/keys/:key_name/rotate
+```
+
+### Rotate Response
+
+```json
+{
+  "version": 2
+}
+```
 
 ## Encrypt
 
@@ -10,29 +111,19 @@ Encrypt data without exposing the key.
 POST /v1/transit/encrypt/:key_name
 ```
 
-### Request
+### Encrypt Request
 
 ```json
 {
-  "plaintext": "base64-encoded-data",
-  "context": "optional-context"
+  "plaintext": "base64-encoded-data"
 }
 ```
 
-### Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `plaintext` | string | Base64-encoded plaintext (required) |
-| `context` | string | Key derivation context (optional) |
-
-### Response
+### Encrypt Response
 
 ```json
 {
-  "data": {
-    "ciphertext": "egide:v1:AAAAAAAAAAAAA..."
-  }
+  "ciphertext": "egide:v1:AAAAAAAAAAAAA..."
 }
 ```
 
@@ -41,10 +132,10 @@ POST /v1/transit/encrypt/:key_name
 ```bash
 plaintext=$(echo -n "credit-card-number" | base64)
 curl -X POST \
-  -H "Authorization: Bearer s.XXXX" \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d "{\"plaintext\":\"$plaintext\"}" \
-  https://egide.example.com/v1/transit/encrypt/payments-key
+  http://localhost:8200/v1/transit/encrypt/payments-key
 ```
 
 ## Decrypt
@@ -59,8 +150,7 @@ POST /v1/transit/decrypt/:key_name
 
 ```json
 {
-  "ciphertext": "egide:v1:AAAAAAAAAAAAA...",
-  "context": "optional-context"
+  "ciphertext": "egide:v1:AAAAAAAAAAAAA..."
 }
 ```
 
@@ -68,83 +158,13 @@ POST /v1/transit/decrypt/:key_name
 
 ```json
 {
-  "data": {
-    "plaintext": "base64-encoded-data"
-  }
-}
-```
-
-## Batch Encrypt
-
-Encrypt multiple items in one request.
-
-```http
-POST /v1/transit/encrypt/:key_name/batch
-```
-
-### Batch Encrypt Request
-
-```json
-{
-  "items": [
-    {"plaintext": "base64-item-1"},
-    {"plaintext": "base64-item-2"},
-    {"plaintext": "base64-item-3"}
-  ]
-}
-```
-
-### Batch Encrypt Response
-
-```json
-{
-  "data": {
-    "results": [
-      {"ciphertext": "egide:v1:AAA..."},
-      {"ciphertext": "egide:v1:BBB..."},
-      {"ciphertext": "egide:v1:CCC..."}
-    ]
-  }
-}
-```
-
-## Batch Decrypt
-
-Decrypt multiple items in one request.
-
-```http
-POST /v1/transit/decrypt/:key_name/batch
-```
-
-### Batch Decrypt Request
-
-```json
-{
-  "items": [
-    {"ciphertext": "egide:v1:AAA..."},
-    {"ciphertext": "egide:v1:BBB..."},
-    {"ciphertext": "egide:v1:CCC..."}
-  ]
-}
-```
-
-### Batch Decrypt Response
-
-```json
-{
-  "data": {
-    "results": [
-      {"plaintext": "base64-item-1"},
-      {"plaintext": "base64-item-2"},
-      {"plaintext": "base64-item-3"}
-    ]
-  }
+  "plaintext": "base64-encoded-data"
 }
 ```
 
 ## Rewrap
 
-Re-encrypt ciphertext with the latest key version.
+Re-encrypt ciphertext with the latest key version, without exposing plaintext. If the ciphertext is already at the latest version, it is returned unchanged.
 
 ```http
 POST /v1/transit/rewrap/:key_name
@@ -162,100 +182,26 @@ POST /v1/transit/rewrap/:key_name
 
 ```json
 {
-  "data": {
-    "ciphertext": "egide:v3:BBBBBBBBBBBBB..."
-  }
+  "ciphertext": "egide:v3:BBBBBBBBBBBBB..."
 }
 ```
 
 Use rewrap after key rotation to update stored ciphertext.
 
-## Batch Rewrap
-
-Rewrap multiple items.
-
-```http
-POST /v1/transit/rewrap/:key_name/batch
-```
-
-### Batch Rewrap Request
-
-```json
-{
-  "items": [
-    {"ciphertext": "egide:v1:AAA..."},
-    {"ciphertext": "egide:v2:BBB..."}
-  ]
-}
-```
-
-### Batch Rewrap Response
-
-```json
-{
-  "data": {
-    "results": [
-      {"ciphertext": "egide:v3:CCC..."},
-      {"ciphertext": "egide:v3:DDD..."}
-    ]
-  }
-}
-```
-
 ## Generate Datakey
 
-Generate a data encryption key.
+Generate a data encryption key wrapped under a transit key. The request has no body.
 
 ```http
 POST /v1/transit/datakey/:key_name
 ```
 
-### Generate Datakey Request
-
-```json
-{
-  "type": "aes256",
-  "context": "optional-context"
-}
-```
-
-### Generate Datakey Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `type` | string | Key type (default: aes256) |
-| `context` | string | Key derivation context (optional) |
-| `bits` | integer | Key size in bits (default: 256) |
-
 ### Generate Datakey Response
 
 ```json
 {
-  "data": {
-    "plaintext": "base64-encoded-key",
-    "ciphertext": "egide:v1:encrypted-key"
-  }
-}
-```
-
-### Wrapped Datakey Only
-
-For storage (no plaintext returned):
-
-```json
-{
-  "type": "aes256",
-  "wrapped_only": true
-}
-```
-
-Response:
-
-```json
-{
-  "data": {
-    "ciphertext": "egide:v1:encrypted-key"
-  }
+  "plaintext": "base64-encoded-key",
+  "ciphertext": "egide:v1:encrypted-key"
 }
 ```
 
@@ -265,56 +211,60 @@ Response:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer s.XXXX" \
-  -d '{"type":"aes256"}' \
-  https://egide.example.com/v1/transit/datakey/my-key
+  -H "Authorization: Bearer <token>" \
+  http://localhost:8200/v1/transit/datakey/my-key
 ```
 
-2. **Encrypt data locally** with `plaintext` key
+2. **Encrypt data locally** with the `plaintext` key
 3. **Store** encrypted data + `ciphertext` (encrypted key)
-4. **Discard** `plaintext` key
+4. **Discard** the `plaintext` key
 
 To decrypt:
 
-1. **Decrypt datakey**:
+1. **Decrypt the datakey**:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer s.XXXX" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
   -d '{"ciphertext":"egide:v1:..."}' \
-  https://egide.example.com/v1/transit/decrypt/my-key
+  http://localhost:8200/v1/transit/decrypt/my-key
 ```
 
-2. **Decrypt data locally** with the key
+2. **Decrypt data locally** with the recovered key
 
-## Context (Key Derivation)
+## Planned Features
 
-Use context for tenant isolation with a shared key:
-
-```bash
-# Tenant A
-curl -X POST \
-  -d '{"plaintext":"...", "context":"tenant-a"}' \
-  https://egide.example.com/v1/transit/encrypt/shared-key
-
-# Tenant B
-curl -X POST \
-  -d '{"plaintext":"...", "context":"tenant-b"}' \
-  https://egide.example.com/v1/transit/encrypt/shared-key
-```
-
-Each context derives a unique key from the master key.
+> **Status: planned, not implemented yet.** The following features do not exist today:
+>
+> - Batch operations (`/v1/transit/encrypt/:key_name/batch` and equivalents): each call handles one value
+> - Key-derivation `context` (convergent or per-tenant derived keys): use a separate named key per tenant instead
+> - Datakey options (`type`, `bits`, `wrapped_only`): the datakey endpoint always returns a 256-bit key with both `plaintext` and `ciphertext`
+> - Sign, verify, hash and HMAC endpoints: planned for 0.3.0
 
 ## Errors
 
-| Code | Error | Description |
-|------|-------|-------------|
-| `400` | `invalid_ciphertext` | Malformed ciphertext |
-| `400` | `invalid_plaintext` | Invalid base64 encoding |
-| `404` | `key_not_found` | Key not found |
-| `403` | `decryption_failed` | Decryption failed (wrong key or corrupted) |
+Errors are RFC 9457 `application/problem+json`:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "not found"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| `400` | Invalid base64 plaintext, malformed ciphertext, version below minimum, decryption failed (anti-oracle: no distinction between wrong key and corrupted data) |
+| `401` | Missing or invalid bearer token |
+| `403` | Non-root caller on key management, or deletion not allowed for the key |
+| `404` | Key or key version not found |
+| `409` | Key with the same name already exists |
+| `503` | Vault is sealed |
 
 ## Next Steps
 
-- [PKI API](pki.md): Certificate management
 - [Secrets API](secrets.md): Secret storage
+- [System API](system.md): Administration

@@ -6,11 +6,11 @@ This document describes Egide's security architecture and threat model.
 
 Egide is designed with defense-in-depth principles:
 
-1. **Encryption at rest**: All data is encrypted before storage
-2. **Encryption in transit**: TLS for all communications
-3. **Access control**: Policy-based authorization
-4. **Audit logging**: Complete audit trail
-5. **Seal/Unseal**: Master key protection
+1. **Encryption at rest**: All data is encrypted before storage (implemented)
+2. **Encryption in transit**: TLS terminated at a reverse proxy in front of Egide; server-side TLS is planned, not implemented yet
+3. **Access control**: bearer-token authentication with root-only gating for administrative operations (implemented); path-based policies are planned
+4. **Audit logging**: planned for 0.2.0, not implemented yet
+5. **Seal/Unseal**: Master key protection (implemented)
 
 ## Threat Model
 
@@ -18,11 +18,11 @@ Egide is designed with defense-in-depth principles:
 
 | Threat | Mitigation |
 |--------|------------|
-| Unauthorized access | Authentication + Authorization |
+| Unauthorized access | Authentication + root-only authorization (path-based policies planned) |
 | Data theft at rest | AES-256-GCM encryption |
-| Data theft in transit | TLS 1.3 |
-| Privilege escalation | Least privilege policies |
-| Insider threats | Audit logging, separation of duties |
+| Data theft in transit | TLS at the reverse proxy (server-side TLS planned) |
+| Privilege escalation | Root/non-root separation today; least privilege policies planned |
+| Insider threats | Separation of duties on unseal shares; audit logging planned for 0.2.0 |
 | Key compromise | Key rotation, versioning |
 
 ### Out of Scope
@@ -76,12 +76,12 @@ Example (5 shares, 3 threshold):
 
 | Purpose | Algorithm |
 |---------|-----------|
-| Data encryption | AES-256-GCM |
-| Key wrapping | AES-256-KWP |
-| Signatures | Ed25519, ECDSA P-256/P-384, RSA-PSS |
+| Data encryption | AES-256-GCM (Transit also offers ChaCha20-Poly1305 keys) |
+| Datakey wrapping | AES-256-GCM (under the transit key) |
+| Signatures | Planned with the KMS engine (0.3.0): Ed25519, ECDSA, RSA-PSS |
 | Key derivation | HKDF-SHA256 |
-| Password hashing | Argon2id |
-| Random generation | ChaCha20-based CSPRNG |
+| Token hashing | Argon2id (root token hash at rest) |
+| Random generation | OS CSPRNG |
 
 ## Seal/Unseal Mechanism
 
@@ -91,7 +91,7 @@ When sealed:
 
 - Master key not in memory
 - All data inaccessible
-- Only health check endpoints available
+- Only system endpoints respond (health, status, init, unseal); secrets and transit return `503`
 - No read/write operations possible
 
 ### Unseal Process
@@ -106,44 +106,15 @@ When sealed:
 
 - Master key only in memory when unsealed
 - Unseal keys never stored on server
-- Auto-seal on suspicious activity (optional)
 - Memory cleared on seal
 
 ## Access Control
 
+Today, authorization is a binary root/non-root distinction: administrative operations (init, seal, transit key management, service token management) require the root token; secrets and transit data operations are open to any authenticated token (root or service token).
+
 ### Policy-Based Authorization
 
-Policies define access using path patterns:
-
-```hcl
-# Read secrets under myapp/
-path "secrets/myapp/*" {
-  capabilities = ["read", "list"]
-}
-
-# Full access to specific path
-path "secrets/admin/config" {
-  capabilities = ["create", "read", "update", "delete"]
-}
-
-# Deny access
-path "secrets/forbidden/*" {
-  capabilities = ["deny"]
-}
-```
-
-### Capabilities
-
-| Capability | Description |
-|------------|-------------|
-| `create` | Create new resources |
-| `read` | Read existing resources |
-| `update` | Modify existing resources |
-| `delete` | Remove resources |
-| `list` | List resources |
-| `deny` | Explicitly deny (overrides other rules) |
-
-### Principle of Least Privilege
+> **Status: planned, not implemented yet.** Path-based, least-privilege policies (path patterns, capabilities, explicit deny) do not exist today; see [Authentication](../concepts/authentication.md#policies). The principles below describe the target model:
 
 - Default deny: No access without explicit policy
 - Specific paths: Grant access to specific resources only
@@ -154,74 +125,27 @@ path "secrets/forbidden/*" {
 ### Token Security
 
 - Tokens are cryptographically random
-- Tokens can have TTL (time-to-live)
-- Tokens can be revoked immediately
-- Token accessor for management without exposing token
+- Service tokens can be revoked immediately (`DELETE /v1/auth/service-tokens/{token_id}`)
+- The service token identifier (`token_id`) acts as a non-sensitive reference for listing and revocation without exposing the token
+- Token TTLs at creation time are planned, not implemented yet
 
 ### AppRole Security
 
-- Role ID: Semi-secret (like username)
-- Secret ID: Secret (like password), can have TTL and use limits
-- CIDR binding: Restrict login by IP address
-- Separate credentials for each application
+> **Status: planned for 0.2.0, not implemented yet.** Role ID / Secret ID credentials, TTL and use limits, and CIDR binding describe the target design.
 
 ### mTLS Security
 
-- Certificate-based authentication
-- Mutual authentication (client and server)
-- Certificate revocation checking
-- Short-lived certificates recommended
+> **Status: planned, not implemented yet.** Certificate-based mutual authentication is not available today.
 
 ## Audit Logging
 
-### What's Logged
-
-Every request is logged with:
-
-- Timestamp
-- Client IP address
-- Authentication method and identity
-- Requested path and method
-- Request parameters (sensitive data redacted)
-- Response status
-- Duration
-
-### Log Format
-
-```json
-{
-  "time": "2025-01-15T10:30:00Z",
-  "type": "request",
-  "auth": {
-    "method": "token",
-    "accessor": "xxx...",
-    "policies": ["admin"]
-  },
-  "request": {
-    "id": "req-123",
-    "path": "secrets/myapp/database",
-    "method": "GET",
-    "client_ip": "10.0.0.5"
-  },
-  "response": {
-    "status": 200
-  },
-  "duration_ms": 5
-}
-```
-
-### Log Protection
-
-- Logs are append-only
-- Logs can be sent to multiple destinations
-- Tamper detection via hashing (optional)
-- Log integrity verification
+> **Status: planned for 0.2.0, not implemented yet.** An append-only, HMAC-signed audit log recording every request (timestamp, identity, path, method, status, with sensitive data redacted) is on the roadmap. Today, `tracing` request logs on stdout are the only operational log output; they are not tamper-evident.
 
 ## Network Security
 
 ### TLS Configuration
 
-Recommended settings:
+Egide does not terminate TLS itself (server-side TLS is planned, not implemented yet); apply these settings at the reverse proxy or load balancer in front of it:
 
 - TLS 1.3 only (or TLS 1.2 minimum)
 - Strong cipher suites
@@ -251,7 +175,7 @@ For production initialization:
 
 | Component | Frequency |
 |-----------|-----------|
-| TLS certificates | 90 days |
+| TLS certificates (at the reverse proxy) | 90 days |
 | Encryption keys | 90-365 days |
 | Unseal keys | Annually or on compromise |
 | Access tokens | As short as practical |
@@ -271,10 +195,10 @@ On suspected compromise:
 
 ### Do
 
-- Use TLS in production
+- Terminate TLS in front of Egide in production
 - Rotate keys regularly
-- Use short-lived tokens
-- Monitor audit logs
+- Revoke service tokens that are no longer needed
+- Monitor server logs
 - Test disaster recovery
 - Keep Egide updated
 
@@ -284,7 +208,7 @@ On suspected compromise:
 - Store unseal keys digitally
 - Use root token for normal operations
 - Expose Egide to public internet
-- Ignore audit logs
+- Ignore server logs
 - Skip key rotation
 
 Release builds, including the published Docker image, refuse dev mode by design: there is no way to run dev mode in production, even by mistake. See the [production checklist](../deployment/production-checklist.md).
