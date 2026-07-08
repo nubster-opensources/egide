@@ -9,6 +9,24 @@
 //! - Soft delete with recovery
 //! - Check-and-set (CAS) for optimistic locking
 //! - Per-secret encryption with derived keys
+//!
+//! ## Encryption scheme
+//!
+//! Secret data is encrypted with AES-256-GCM under a key derived per
+//! `(path, version)` pair: HKDF-SHA256 over the master key with
+//! `info = "egide-secrets-v2:{path}:{version}"`. Each version row is written
+//! exactly once, so every derived key encrypts exactly one message and the
+//! NIST SP 800-38D bound on random 96-bit nonces (2^32 messages per key) is
+//! never approached, regardless of rotation rate.
+//!
+//! The AEAD associated data is `"egide-secrets:{path}:{version}"`, sealing
+//! each ciphertext to its storage coordinates: moving or swapping encrypted
+//! blobs between rows fails authentication.
+//!
+//! Alternatives considered and rejected: XChaCha20-Poly1305 (larger nonce
+//! but a new dependency, divergence from the AES-256-GCM doctrine used
+//! elsewhere, and no protection against cross-version splicing on its own)
+//! and deterministic counter nonces (fragile under concurrency and retries).
 
 #![forbid(unsafe_code)]
 
