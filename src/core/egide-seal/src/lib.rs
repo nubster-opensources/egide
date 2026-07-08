@@ -25,6 +25,7 @@ use argon2::{
 use blahaj::{Share as SharkShare, Sharks};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
@@ -343,7 +344,7 @@ impl SealManager {
         })?;
 
         let computed_hmac = compute_master_key_hmac(&secret)?;
-        if computed_hmac != *expected_hmac {
+        if !hmac_tags_match(&computed_hmac, expected_hmac) {
             warn!("Master key reconstruction failed - HMAC mismatch (invalid shares?)");
             // Clear pending shares before returning error
             self.pending_shares.clear();
@@ -476,6 +477,17 @@ fn compute_master_key_hmac(master_key: &[u8]) -> Result<Vec<u8>, SealError> {
         .map_err(|e| SealError::Crypto(format!("HMAC construction failed: {e}")))?;
     mac.update(SEAL_VERIFY_TAG);
     Ok(mac.finalize().into_bytes().to_vec())
+}
+
+/// Compares two HMAC tags in constant time.
+///
+/// A plain `!=` on byte slices short-circuits at the first differing byte,
+/// which leaks the length of the matching prefix through timing. This uses
+/// [`subtle::ConstantTimeEq`] so the comparison time does not depend on the
+/// tag contents. Tag lengths are not secret (SHA-256 tags are always 32
+/// bytes), so a length mismatch may return early.
+fn hmac_tags_match(computed: &[u8], expected: &[u8]) -> bool {
+    computed.ct_eq(expected).into()
 }
 
 /// Generates a random token as hex string.
@@ -766,6 +778,35 @@ mod tests {
     fn from_hex_rejects_empty_input() {
         let result = Share::from_hex("");
         assert!(matches!(result, Err(SealError::InvalidShare(_))));
+    }
+
+    #[test]
+    fn hmac_tags_match_accepts_equal_tags() {
+        let tag = [0x42u8; 32];
+        assert!(hmac_tags_match(&tag, &tag));
+    }
+
+    #[test]
+    fn hmac_tags_match_rejects_difference_in_first_byte() {
+        let expected = [0x42u8; 32];
+        let mut computed = expected;
+        computed[0] ^= 0x01;
+        assert!(!hmac_tags_match(&computed, &expected));
+    }
+
+    #[test]
+    fn hmac_tags_match_rejects_difference_in_last_byte() {
+        let expected = [0x42u8; 32];
+        let mut computed = expected;
+        computed[31] ^= 0x01;
+        assert!(!hmac_tags_match(&computed, &expected));
+    }
+
+    #[test]
+    fn hmac_tags_match_rejects_length_mismatch() {
+        let expected = [0x42u8; 32];
+        let computed = [0x42u8; 16];
+        assert!(!hmac_tags_match(&computed, &expected));
     }
 
     #[tokio::test]
