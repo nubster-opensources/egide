@@ -7,16 +7,14 @@ Use this checklist before deploying Egide to production.
 ### Authentication & Access
 
 - [ ] **Dev mode is refused by design**: release builds, including this Docker image, refuse dev mode categorically. As defense in depth, ensure `EGIDE_UNSAFE_DEV_MODE` is not set and set `EGIDE_ENV=production`
-- [ ] **Change root token** : Revoke initial root token after setup
-- [ ] **Enable authentication** : Configure auth methods (Token, AppRole, OIDC)
-- [ ] **Set up policies** : Define least-privilege access policies
-- [ ] **Enable audit logging** : Track all access and operations
+- [ ] **Limit root token exposure** : provision service tokens for consuming applications and keep the root token for administrative operations only (there is no root token revocation endpoint today)
+- [ ] **Enable authentication** : root token and native service tokens are implemented today; AppRole is planned for 0.2.0
 
 ### Encryption & TLS
 
-- [ ] **Enable TLS** : All traffic must be encrypted
+- [ ] **Terminate TLS in front of Egide** : Egide does not terminate TLS itself (planned, not implemented yet); place a reverse proxy or load balancer in front of it
 - [ ] **Use valid certificates** : Not self-signed in production
-- [ ] **Configure TLS version** : Minimum TLS 1.2
+- [ ] **Configure TLS version** : Minimum TLS 1.2, enforced at the reverse proxy
 - [ ] **Secure private keys** : Restrict file permissions (600)
 
 ### Secrets Management
@@ -30,16 +28,14 @@ Use this checklist before deploying Egide to production.
 
 ### High Availability
 
-- [ ] **Multiple instances** : At least 3 for HA
+- [ ] **Multiple instances** : At least 3 for HA (requires the PostgreSQL backend to be wired in; see Storage below)
 - [ ] **Load balancer** : Distribute traffic
 - [ ] **Health checks** : Automated failover
-- [ ] **Database replication** : PostgreSQL HA setup
 
 ### Storage
 
-- [ ] **Use PostgreSQL** : Not SQLite for production
-- [ ] **Enable connection pooling** : PgBouncer or similar
-- [ ] **Configure backups** : Regular automated backups
+- [ ] **PostgreSQL for multi-instance deployments** : planned, not implemented yet; `egide-server` always uses its bundled SQLite backend today, so each instance has its own local data directory (see [Configuration](../getting-started/configuration.md#storage-backend))
+- [ ] **Configure backups** : Regular automated backups of the data directory
 - [ ] **Test restores** : Verify backup integrity
 
 ### Networking
@@ -75,63 +71,31 @@ Use this checklist before deploying Egide to production.
 
 ## Configuration
 
-### Server Settings
+Egide has no configuration file; it is configured through CLI flags and environment variables only (see [Configuration](../getting-started/configuration.md)).
 
-```toml
-[server]
-bind_address = "0.0.0.0:8200"
-tls_enabled = true
-tls_cert = "/etc/egide/tls.crt"
-tls_key = "/etc/egide/tls.key"
-tls_min_version = "1.2"
-
-[storage]
-type = "postgresql"
-
-[storage.postgresql]
-host = "postgres.internal"
-port = 5432
-database = "egide"
-username = "egide"
-password_env = "EGIDE_DB_PASSWORD"
-ssl_mode = "verify-full"
-pool_max = 50
-
-[log]
-level = "info"
-format = "json"
-
-[audit]
-enabled = true
-log_requests = true
-log_responses = false  # Sensitive data
-```
-
-### Environment Variables
+### Recommended Environment Variables
 
 ```bash
-# Required
-EGIDE_DB_PASSWORD=<secure-password>
-
-# Recommended
-EGIDE_CONFIG=/etc/egide/egide.toml
-EGIDE_LOG_LEVEL=info
+EGIDE_DATA_DIR=/var/lib/egide
+EGIDE_BIND_ADDRESS=0.0.0.0:8200
+EGIDE_GRPC_BIND=0.0.0.0:8201
+RUST_LOG=info
 ```
+
+TLS is not implemented by Egide itself; terminate it at a reverse proxy in front of the server (see [Production Deployment](../guides/production.md#tls)). PostgreSQL storage selection does not exist yet either (see [Configuration](../getting-started/configuration.md#storage-backend)).
 
 ## Compliance
 
 ### Data Protection
 
 - [ ] **Data classification** : Identify sensitive data
-- [ ] **Encryption at rest** : All data encrypted
-- [ ] **Encryption in transit** : TLS everywhere
-- [ ] **Access logging** : Complete audit trail
+- [ ] **Encryption at rest** : All data encrypted (AES-256-GCM, implemented today)
+- [ ] **Encryption in transit** : TLS at the reverse proxy (Egide does not terminate TLS itself)
+- [ ] **Access logging** : `tracing` request logs shipped to your log aggregation system; a tamper-evident audit trail is planned for 0.2.0, not implemented yet
 - [ ] **Data retention** : Policies defined and enforced
 
 ### Security Controls
 
-- [ ] **Audit log retention** : Retention period configured and tested
-- [ ] **Access controls reviewed** : Policies scoped to least privilege
 - [ ] **Encryption at rest verified** : Storage backend uses AES-256-GCM
 - [ ] **Data residency** : Deployment region chosen and documented
 
@@ -140,16 +104,15 @@ EGIDE_LOG_LEVEL=info
 ### Functional Tests
 
 - [ ] **Health check passes** : `/v1/sys/health` returns healthy
-- [ ] **Authentication works** : All auth methods tested
+- [ ] **Authentication works** : root token and service tokens tested
 - [ ] **Secrets CRUD** : Create, read, update, delete tested
 - [ ] **Encryption/decryption** : Transit operations verified
-- [ ] **Certificate issuance** : PKI tested if enabled
 
 ### Security Tests
 
 - [ ] **Penetration test** : External security assessment
 - [ ] **Vulnerability scan** : Automated scanning
-- [ ] **Access review** : Policies reviewed
+- [ ] **Access review** : service token inventory reviewed
 - [ ] **Secret rotation** : Process tested
 
 ### Performance Tests
@@ -181,16 +144,14 @@ EGIDE_LOG_LEVEL=info
 
 | Port | Service | Access |
 |------|---------|--------|
-| 8200 | HTTPS API | Internal/LB only |
-| 5432 | PostgreSQL | Egide servers only |
+| 8200 | REST API | Internal/LB only |
+| 8201 | gRPC API | Internal/LB only |
 
 ### Key Files
 
 | Path | Description | Permissions |
 |------|-------------|-------------|
-| `/etc/egide/egide.toml` | Configuration | 640 |
-| `/etc/egide/tls.key` | TLS private key | 600 |
-| `/var/lib/egide/` | Data directory | 700 |
+| `/var/lib/egide/` | Data directory (SQLite database files) | 700 |
 
 ### Emergency Procedures
 

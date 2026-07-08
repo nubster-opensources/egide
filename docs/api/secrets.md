@@ -1,13 +1,15 @@
 # Secrets API
 
-The Secrets API provides endpoints for managing secrets.
+The Secrets API provides endpoints for managing secrets. All endpoints require a bearer token (`Authorization: Bearer <token>`) and return `503` while the vault is sealed.
+
+Responses are flat JSON objects; errors are returned as `{"error": "..."}`.
 
 ## Create/Update Secret
 
-Create a new secret or update an existing one.
+Create a new secret or update an existing one (writes a new version).
 
 ```http
-POST /v1/secrets/:path
+PUT /v1/secrets/:path
 ```
 
 ### Request
@@ -18,11 +20,7 @@ POST /v1/secrets/:path
     "username": "admin",
     "password": "supersecret"
   },
-  "metadata": {
-    "owner": "team-a",
-    "environment": "production"
-  },
-  "ttl": "24h"
+  "cas": 1
 }
 ```
 
@@ -30,45 +28,36 @@ POST /v1/secrets/:path
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `data` | object | Key-value pairs (required) |
-| `metadata` | object | Custom metadata (optional) |
-| `ttl` | string | Time to live (optional) |
+| `data` | object | String key-value pairs (required) |
+| `cas` | integer | Check-and-set guard: only write if the current version equals this value; omit for an unconditional write (optional) |
 
 ### Response
 
 ```json
 {
-  "data": {
-    "path": "myapp/database",
-    "version": 1,
-    "created_at": "2025-01-15T10:30:00Z"
-  }
+  "version": 2
 }
 ```
+
+A `cas` mismatch returns `409 Conflict`.
 
 ### Example
 
 ```bash
-curl -X POST \
-  -H "Authorization: Bearer s.XXXX" \
+curl -X PUT \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"data":{"username":"admin","password":"secret"}}' \
-  https://egide.example.com/v1/secrets/myapp/database
+  http://localhost:8200/v1/secrets/myapp/database
 ```
 
 ## Read Secret
 
-Read a secret at the specified path.
+Read the current version of a secret at the specified path.
 
 ```http
 GET /v1/secrets/:path
 ```
-
-### Query Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `version` | integer | Specific version (optional) |
 
 ### Read Secret Response
 
@@ -79,90 +68,60 @@ GET /v1/secrets/:path
     "password": "supersecret"
   },
   "metadata": {
-    "path": "myapp/database",
     "version": 1,
-    "created_at": "2025-01-15T10:30:00Z",
-    "updated_at": "2025-01-15T10:30:00Z",
-    "custom": {
-      "owner": "team-a"
-    }
+    "created_at": 1736935800,
+    "deleted": false
   }
 }
 ```
 
+`created_at` is a unix timestamp in seconds.
+
 ### Read Secret Example
 
 ```bash
-# Get current version
-curl -H "Authorization: Bearer s.XXXX" \
-  https://egide.example.com/v1/secrets/myapp/database
-
-# Get specific version
-curl -H "Authorization: Bearer s.XXXX" \
-  https://egide.example.com/v1/secrets/myapp/database?version=2
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8200/v1/secrets/myapp/database
 ```
+
+> Reading a specific older version over the REST API (`?version=N`) is planned, not implemented yet; `GET` always returns the current version.
 
 ## List Secrets
 
-List secrets at a path.
+List all secret paths.
 
 ```http
-GET /v1/secrets?list=true&prefix=:prefix
+GET /v1/secrets
 ```
-
-### List Secrets Query Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `list` | boolean | Enable list mode (required) |
-| `prefix` | string | Path prefix (optional) |
-| `page` | integer | Page number (default: 1) |
-| `page_size` | integer | Items per page (default: 20) |
 
 ### List Secrets Response
 
 ```json
 {
-  "data": {
-    "keys": [
-      "myapp/",
-      "shared/"
-    ]
-  },
-  "pagination": {
-    "page": 1,
-    "page_size": 20,
-    "total": 2
-  }
+  "keys": [
+    "myapp/database",
+    "myapp/api-key",
+    "shared/smtp"
+  ]
 }
 ```
 
 ### List Secrets Example
 
 ```bash
-# List all secrets
-curl -H "Authorization: Bearer s.XXXX" \
-  "https://egide.example.com/v1/secrets?list=true"
-
-# List secrets under myapp/
-curl -H "Authorization: Bearer s.XXXX" \
-  "https://egide.example.com/v1/secrets?list=true&prefix=myapp/"
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8200/v1/secrets
 ```
+
+> Prefix filtering and pagination query parameters are planned, not implemented yet; the endpoint returns all paths.
 
 ## Delete Secret
 
-Delete a secret.
+Soft-delete a secret (the record is marked deleted, versions are retained by the engine).
 
 ```http
 DELETE /v1/secrets/:path
 ```
-
-### Delete Secret Query Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `versions` | string | Comma-separated versions to delete |
-| `permanent` | boolean | Permanently delete (default: false) |
 
 ### Delete Secret Response
 
@@ -173,140 +132,30 @@ DELETE /v1/secrets/:path
 ### Delete Secret Example
 
 ```bash
-# Soft delete (can be recovered)
 curl -X DELETE \
-  -H "Authorization: Bearer s.XXXX" \
-  https://egide.example.com/v1/secrets/myapp/database
-
-# Delete specific versions
-curl -X DELETE \
-  -H "Authorization: Bearer s.XXXX" \
-  "https://egide.example.com/v1/secrets/myapp/database?versions=1,2"
-
-# Permanent delete
-curl -X DELETE \
-  -H "Authorization: Bearer s.XXXX" \
-  "https://egide.example.com/v1/secrets/myapp/database?permanent=true"
+  -H "Authorization: Bearer <token>" \
+  http://localhost:8200/v1/secrets/myapp/database
 ```
 
-## Recover Secret
-
-Recover a soft-deleted secret.
-
-```http
-POST /v1/secrets/:path/recover
-```
-
-### Recover Secret Response
-
-```json
-{
-  "data": {
-    "path": "myapp/database",
-    "recovered": true
-  }
-}
-```
-
-### Recover Secret Example
-
-```bash
-curl -X POST \
-  -H "Authorization: Bearer s.XXXX" \
-  https://egide.example.com/v1/secrets/myapp/database/recover
-```
-
-## Get Secret Metadata
-
-Get metadata without the secret data.
-
-```http
-GET /v1/secrets/:path/metadata
-```
-
-### Get Secret Metadata Response
-
-```json
-{
-  "data": {
-    "path": "myapp/database",
-    "current_version": 3,
-    "versions": {
-      "1": {
-        "created_at": "2025-01-01T00:00:00Z",
-        "deleted": false
-      },
-      "2": {
-        "created_at": "2025-01-15T00:00:00Z",
-        "deleted": true
-      },
-      "3": {
-        "created_at": "2025-02-01T00:00:00Z",
-        "deleted": false
-      }
-    },
-    "custom": {
-      "owner": "team-a"
-    }
-  }
-}
-```
-
-## Update Metadata
-
-Update secret metadata without changing the data.
-
-```http
-PATCH /v1/secrets/:path/metadata
-```
-
-### Update Metadata Request
-
-```json
-{
-  "custom": {
-    "owner": "team-b",
-    "reviewed": true
-  }
-}
-```
-
-### Update Metadata Response
-
-```json
-{
-  "data": {
-    "path": "myapp/database",
-    "updated": true
-  }
-}
-```
+> Version-targeted deletion (`?versions=1,2`), permanent deletion (`?permanent=true`), a recover endpoint, and dedicated metadata endpoints (`GET`/`PATCH /v1/secrets/:path/metadata`) are planned, not implemented yet. TTL and custom metadata on secrets are not implemented either.
 
 ## Errors
 
-| Code | Error | Description |
-|------|-------|-------------|
-| `400` | `invalid_path` | Invalid secret path |
-| `400` | `invalid_data` | Invalid secret data |
-| `404` | `not_found` | Secret not found |
-| `404` | `version_not_found` | Specified version not found |
-| `410` | `expired` | Secret has expired |
-| `403` | `permission_denied` | Insufficient permissions |
-
-### Error Response
-
 ```json
 {
-  "errors": [
-    {
-      "code": "not_found",
-      "message": "Secret not found: myapp/database"
-    }
-  ]
+  "error": "not found"
 }
 ```
 
+| Code | Description |
+|------|-------------|
+| `400` | Invalid path or data |
+| `401` | Missing or invalid bearer token (returned as RFC 9457 `application/problem+json`) |
+| `404` | Secret not found |
+| `409` | Check-and-set (`cas`) version mismatch |
+| `503` | Vault is sealed |
+
 ## Next Steps
 
-- [KMS API](kms.md): Key management API
 - [Transit API](transit.md): Encryption API
+- [System API](system.md): Administration

@@ -50,35 +50,15 @@ Expand-Archive -Path "egide.zip" -DestinationPath "C:\egide"
 
 ## Directory Structure
 
-Create the directory structure:
+Create the data directory:
 
 ```bash
-sudo mkdir -p /etc/egide
 sudo mkdir -p /var/lib/egide
-sudo mkdir -p /var/log/egide
 ```
 
 ## Configuration
 
-### /etc/egide/egide.toml
-
-```toml
-[server]
-bind_address = "0.0.0.0:8200"
-tls_enabled = false
-
-[storage]
-type = "sqlite"
-
-[storage.sqlite]
-path = "/var/lib/egide/egide.db"
-journal_mode = "WAL"
-
-[log]
-level = "info"
-format = "text"
-file = "/var/log/egide/egide.log"
-```
+Egide has no configuration file; it is configured through CLI flags or environment variables only (see [Configuration](../getting-started/configuration.md)).
 
 ## Systemd Service
 
@@ -95,7 +75,11 @@ Wants=network-online.target
 Type=simple
 User=egide
 Group=egide
-ExecStart=/usr/local/bin/egide-server --config /etc/egide/egide.toml
+Environment=EGIDE_DATA_DIR=/var/lib/egide
+Environment=EGIDE_BIND_ADDRESS=0.0.0.0:8200
+Environment=EGIDE_GRPC_BIND=0.0.0.0:8201
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/egide-server
 ExecReload=/bin/kill -HUP $MAINPID
 KillSignal=SIGTERM
 Restart=on-failure
@@ -108,7 +92,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/egide /var/log/egide
+ReadWritePaths=/var/lib/egide
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
@@ -124,8 +108,6 @@ sudo useradd --system --home /var/lib/egide --shell /bin/false egide
 
 # Set permissions
 sudo chown -R egide:egide /var/lib/egide
-sudo chown -R egide:egide /var/log/egide
-sudo chown -R egide:egide /etc/egide
 
 # Enable service
 sudo systemctl daemon-reload
@@ -144,15 +126,20 @@ sudo systemctl status egide
 egide operator init
 
 # Output:
-# Unseal Key 1: xxxx
-# Unseal Key 2: xxxx
-# Unseal Key 3: xxxx
-# Unseal Key 4: xxxx
-# Unseal Key 5: xxxx
+# Unseal Keys (hex):
+#   Key 1: xxxx
+#   Key 2: xxxx
+#   Key 3: xxxx
+#   Key 4: xxxx
+#   Key 5: xxxx
 #
-# Initial Root Token: s.xxxxx
+# Unseal Keys (base64):
+#   Key 1: xxxx
+#   ...
 #
-# Store these keys securely!
+# Root Token: xxxxx
+#
+# IMPORTANT: Save these keys securely!
 ```
 
 ### Unseal
@@ -190,90 +177,33 @@ for key in "${UNSEAL_KEYS[@]}"; do
 done
 ```
 
-## TLS Configuration
+## TLS
 
-### Generate Certificates
+> **Status: planned, not implemented yet.** `egide-server` does not terminate TLS itself; it binds to a plain HTTP address (`--bind` / `EGIDE_BIND_ADDRESS`). Terminate TLS with a reverse proxy (nginx, Caddy, Traefik) placed in front of it, using certificates from a trusted CA or your internal PKI:
 
 ```bash
-# Generate CA
-openssl genrsa -out /etc/egide/ca.key 4096
-openssl req -x509 -new -nodes -key /etc/egide/ca.key \
-  -sha256 -days 3650 -out /etc/egide/ca.crt \
+# Generate CA and server certificate for the reverse proxy
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key \
+  -sha256 -days 3650 -out ca.crt \
   -subj "/CN=Egide CA"
 
-# Generate server certificate
-openssl genrsa -out /etc/egide/tls.key 2048
-openssl req -new -key /etc/egide/tls.key \
-  -out /etc/egide/tls.csr \
+openssl genrsa -out tls.key 2048
+openssl req -new -key tls.key \
+  -out tls.csr \
   -subj "/CN=egide.example.com"
 
-# Sign certificate
-openssl x509 -req -in /etc/egide/tls.csr \
-  -CA /etc/egide/ca.crt -CAkey /etc/egide/ca.key \
-  -CAcreateserial -out /etc/egide/tls.crt \
+openssl x509 -req -in tls.csr \
+  -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out tls.crt \
   -days 365 -sha256
 
-# Set permissions
-sudo chown egide:egide /etc/egide/*.key
-sudo chmod 600 /etc/egide/*.key
-```
-
-### Update TLS Configuration
-
-```toml
-[server]
-bind_address = "0.0.0.0:8200"
-tls_enabled = true
-tls_cert = "/etc/egide/tls.crt"
-tls_key = "/etc/egide/tls.key"
+sudo chmod 600 tls.key
 ```
 
 ## PostgreSQL Setup
 
-### Install PostgreSQL
-
-```bash
-# Ubuntu/Debian
-sudo apt install postgresql postgresql-contrib
-
-# RHEL/CentOS
-sudo dnf install postgresql-server postgresql-contrib
-sudo postgresql-setup --initdb
-sudo systemctl start postgresql
-```
-
-### Create Database
-
-```bash
-sudo -u postgres psql << EOF
-CREATE USER egide WITH PASSWORD 'secure-password';
-CREATE DATABASE egide OWNER egide;
-GRANT ALL PRIVILEGES ON DATABASE egide TO egide;
-\c egide
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-EOF
-```
-
-### Update Configuration
-
-```toml
-[storage]
-type = "postgresql"
-
-[storage.postgresql]
-host = "localhost"
-port = 5432
-database = "egide"
-username = "egide"
-password_env = "EGIDE_DB_PASSWORD"
-```
-
-### Set Environment Variable
-
-```bash
-# Add to /etc/environment or systemd service
-EGIDE_DB_PASSWORD=secure-password
-```
+> **Status: planned, not implemented yet.** `egide-server` always uses its bundled SQLite backend today; there is no flag or environment variable to point it at PostgreSQL, even though the `egide-storage-postgres` crate exists in the workspace. See [Configuration](../getting-started/configuration.md#storage-backend).
 
 ## Firewall
 
@@ -288,44 +218,31 @@ sudo firewall-cmd --permanent --add-port=8200/tcp
 sudo firewall-cmd --reload
 ```
 
-## Log Rotation
+## Log Management
 
-### /etc/logrotate.d/egide
+Egide logs to stdout via `tracing`, filtered by `RUST_LOG` (default `info,egide=debug`). Under systemd, stdout is captured by journald automatically:
 
-```text
-/var/log/egide/*.log {
-    daily
-    missingok
-    rotate 14
-    compress
-    delaycompress
-    notifempty
-    create 0640 egide egide
-    postrotate
-        systemctl reload egide > /dev/null 2>&1 || true
-    endscript
-}
+```bash
+sudo journalctl -u egide -f
 ```
+
+Configure journald's own retention (`SystemMaxUse=` in `/etc/systemd/journald.conf`) if you need to cap disk usage; Egide does not write its own log files.
 
 ## Backup
 
 ### SQLite Backup
 
+The data directory holds one SQLite file per internal engine (for example `system.db`, `transit.db`, and one file per secrets tenant). Back up the whole directory:
+
 ```bash
 # Stop service (recommended)
 sudo systemctl stop egide
 
-# Backup database
-cp /var/lib/egide/egide.db /backup/egide-$(date +%Y%m%d).db
+# Backup the data directory
+cp -r /var/lib/egide /backup/egide-$(date +%Y%m%d)
 
 # Restart
 sudo systemctl start egide
-```
-
-### PostgreSQL Backup
-
-```bash
-pg_dump -U egide egide > /backup/egide-$(date +%Y%m%d).sql
 ```
 
 ## Upgrade
@@ -362,15 +279,12 @@ sudo journalctl -u egide -f
 
 # Check permissions
 ls -la /var/lib/egide
-ls -la /etc/egide
 ```
 
 ### Permission Denied
 
 ```bash
 sudo chown -R egide:egide /var/lib/egide
-sudo chown -R egide:egide /etc/egide
-sudo chmod 600 /etc/egide/*.key
 ```
 
 ### Port Already in Use

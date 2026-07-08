@@ -6,13 +6,12 @@ Best practices for deploying Egide in production.
 
 Before going to production, ensure:
 
-- [ ] TLS is enabled
+- [ ] TLS is terminated in front of Egide (a reverse proxy or load balancer; Egide does not terminate TLS itself, see below)
 - [ ] Dev mode is not enabled (refused by release builds by design; confirm `EGIDE_UNSAFE_DEV_MODE` is unset and `EGIDE_ENV=production`)
 - [ ] Unseal keys are stored securely
-- [ ] Root token is revoked
+- [ ] Additional service tokens are provisioned and the root token's plaintext is discarded after setup (see below; there is no root token revocation endpoint today)
 - [ ] Backup strategy is in place
 - [ ] Monitoring is configured
-- [ ] Audit logging is enabled
 - [ ] Resource limits are set
 
 ## Security Hardening
@@ -21,18 +20,9 @@ Before going to production, ensure:
 
 Release builds, including the published Docker image, refuse dev mode by design: there is no configuration flag to disable, because it cannot be enabled in the first place. Dev mode exists only in debug builds and requires both `EGIDE_UNSAFE_DEV_MODE=1` and the absence of `EGIDE_ENV=production`. As defense in depth in production, set `EGIDE_ENV=production` and ensure `EGIDE_UNSAFE_DEV_MODE` is not set.
 
-### Enable TLS
+### TLS
 
-Always use TLS:
-
-```toml
-[server]
-tls_enabled = true
-tls_cert_file = "/etc/egide/tls/server.crt"
-tls_key_file = "/etc/egide/tls/server.key"
-```
-
-Use certificates from a trusted CA or your internal PKI.
+> **Status: planned, not implemented yet.** Egide does not terminate TLS itself; `egide-server` binds to a plain HTTP address (`--bind` / `EGIDE_BIND_ADDRESS`). Put a reverse proxy or load balancer (nginx, Traefik, HAProxy, a cloud load balancer) in front of it and terminate TLS there, using certificates from a trusted CA or your internal PKI.
 
 ### Secure Unseal Keys
 
@@ -41,44 +31,35 @@ Use certificates from a trusted CA or your internal PKI.
 3. **Geographic distribution**: Store keys in different locations
 4. **Regular rotation**: Rotate unseal keys periodically
 
-### Revoke Root Token
+### Limit Root Token Usage
 
 After initial setup:
 
-1. Create admin policies and tokens
-2. Revoke the root token:
+1. Create a service token for each consuming application (root-only operation):
 
 ```bash
-egide token revoke <root-token>
+curl -s -X POST http://localhost:8200/v1/auth/service-tokens \
+  -H "Authorization: Bearer <root-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"service_name": "my-service"}'
 ```
 
-3. Generate new root token only when needed
+2. Use service tokens for day-to-day secrets and Transit access; keep the root token for administrative operations only (init, seal, transit key management).
+
+> **Status: planned, not implemented yet.** There is no root token revocation or rotation endpoint today; `POST /v1/sys/init` issues the root token exactly once. Service tokens, in contrast, can be listed and revoked individually via `GET` / `DELETE /v1/auth/service-tokens/{token_id}` (root-only).
 
 ### Network Security
 
 1. **Firewall**: Restrict access to port 8200
 2. **Private network**: Deploy in private subnet
-3. **Load balancer**: Terminate TLS at load balancer or Egide
-4. **mTLS**: Use mutual TLS for service-to-service communication
+3. **Load balancer**: Terminate TLS at the load balancer or reverse proxy (Egide itself does not terminate TLS, see above)
+4. **mTLS**: Use mutual TLS between the load balancer and consuming services
 
 ## Storage
 
-### PostgreSQL (Recommended)
+### PostgreSQL
 
-Use PostgreSQL for production:
-
-```toml
-[storage]
-backend = "postgres"
-
-[storage.postgres]
-host = "postgres.internal"
-port = 5432
-database = "egide"
-username = "egide"
-password = "${POSTGRES_PASSWORD}"
-ssl_mode = "require"
-```
+> **Status: planned, not implemented yet.** An `egide-storage-postgres` crate exists in the workspace and is exercised by its own test suite, but `egide-server` does not yet expose a flag or environment variable to select it at startup. The running server always uses the bundled SQLite backend today (see [Configuration](../getting-started/configuration.md#storage-backend)). Track the roadmap for the runtime storage-selection work.
 
 ### Database Security
 
@@ -90,6 +71,8 @@ ssl_mode = "require"
 ## High Availability
 
 See [High Availability Guide](high-availability.md) for detailed HA setup.
+
+> Multi-instance HA needs a storage backend shared across instances. Today Egide always uses its bundled SQLite backend (one file per node); the PostgreSQL backend exists in the workspace but is not yet wired into `egide-server` startup (see [Storage](#storage) above). The diagram below shows the target topology.
 
 ### Stateless Deployment
 
@@ -118,39 +101,18 @@ Deploy multiple Egide instances behind a load balancer:
 Configure health checks for your load balancer:
 
 - **Endpoint**: `GET /v1/sys/health`
-- **Healthy**: 200 OK
-- **Unhealthy**: 5xx or timeout
+- **Always returns**: `200 OK` with a JSON body (`{"status": "ok", "initialized": ..., "sealed": ..., "version": ..., "uptime_secs": ...}`); the HTTP status code does not vary with seal state today. Inspect the `sealed` and `initialized` fields in the body if the load balancer needs to distinguish an unsealed-and-ready instance from a sealed one.
+- **Unhealthy**: connection refused, timeout, or non-200 (process crash)
 
 ## Monitoring
 
 ### Metrics
 
-Enable Prometheus metrics:
-
-```toml
-[telemetry]
-metrics_enabled = true
-metrics_path = "/metrics"
-```
-
-Key metrics:
-- `egide_requests_total`: Total requests by endpoint
-- `egide_request_duration_seconds`: Request latency
-- `egide_secrets_total`: Number of stored secrets
-- `egide_seal_status`: Seal status (0=unsealed, 1=sealed)
+> **Status: planned, not implemented yet.** Egide does not expose a Prometheus `/metrics` endpoint or any metrics configuration today. See [Observability](../deployment/overview.md) for the roadmap.
 
 ### Logging
 
-Configure structured logging:
-
-```toml
-[logging]
-level = "info"
-format = "json"
-output = "/var/log/egide/egide.log"
-```
-
-Ship logs to your log aggregation system (ELK, Loki, etc.).
+Egide logs to stdout using `tracing`, controlled by the standard `RUST_LOG` environment variable (for example `RUST_LOG=info,egide=debug`, which is also the built-in default). There is no `[logging]` configuration section or output-file setting: redirect stdout or capture it with your container runtime / process supervisor, and ship it to your log aggregation system (ELK, Loki, etc.).
 
 ### Alerts
 
@@ -158,7 +120,6 @@ Set up alerts for:
 
 - Egide sealed unexpectedly
 - High error rate
-- Certificate expiration
 - Storage capacity
 - High latency
 
@@ -209,27 +170,13 @@ deploy:
 
 ### Audit Logging
 
-All operations are logged:
-
-```json
-{
-  "time": "2025-01-15T10:30:00Z",
-  "type": "request",
-  "path": "/v1/secrets/myapp/database",
-  "method": "GET",
-  "client_ip": "10.0.0.5",
-  "user": "admin",
-  "policies": ["admin-policy"],
-  "success": true
-}
-```
+> **Status: planned for 0.2.0, not implemented yet.** An append-only, HMAC-signed audit log is on the roadmap. Today, `tracing` request logs (see [Logging](#logging) above) are the only operational log output; they are not a tamper-evident audit trail.
 
 ### Security Features
 
 - **Data residency**: deploy in any infrastructure you control, no external data export
-- **Audit trail**: append-only, signed log of every operation
-- **Access controls**: policy-based authorization with token authentication
-- **Encryption**: secrets encrypted at rest (AES-256-GCM) and in transit (TLS)
+- **Access controls**: root token and native service tokens (`egst_<id>.<secret>`), both authenticated via `Authorization: Bearer`
+- **Encryption**: secrets and key material encrypted at rest (AES-256-GCM); encryption in transit depends on a TLS-terminating reverse proxy in front of Egide (see [TLS](#tls) above)
 
 ## Maintenance
 
@@ -244,22 +191,30 @@ All operations are logged:
 
 ### Certificate Renewal
 
+TLS certificates are managed by whatever reverse proxy or load balancer terminates TLS in front of Egide (see [TLS](#tls) above), not by Egide itself:
+
 1. Generate new certificates before expiration
-2. Update configuration
-3. Reload or restart Egide
+2. Update the reverse proxy configuration
+3. Reload or restart the reverse proxy
 4. Verify TLS is working
 
 ### Key Rotation
 
-Rotate encryption keys periodically:
+Rotate Transit keys individually through the REST API (root token required), then rewrap stored ciphertext with the new version:
 
 ```bash
-# Rotate KMS keys
-egide kms rotate <key-name>
+# Rotate a Transit key to a new version
+curl -s -X POST http://localhost:8200/v1/transit/keys/<key-name>/rotate \
+  -H "Authorization: Bearer <root-token>"
 
-# Rewrap secrets with new key
-egide transit rewrap <key-name> --all
+# Rewrap a stored ciphertext to the latest version
+curl -s -X POST http://localhost:8200/v1/transit/rewrap/<key-name> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"ciphertext": "egide:v1:..."}'
 ```
+
+There is no bulk `--all` rewrap operation: rewrap each stored ciphertext individually.
 
 ## Next Steps
 

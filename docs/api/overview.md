@@ -1,28 +1,25 @@
 # API Overview
 
-Egide provides a RESTful API for all operations.
+Egide provides a RESTful API for all operations (a gRPC API with the same surface is served on the gRPC bind address).
 
 ## Base URL
 
 ```http
-https://egide.example.com/v1
+http://<host>:8200/v1
 ```
+
+The server itself speaks plain HTTP; terminate TLS at a reverse proxy or load balancer in front of Egide (server-side TLS is planned, not implemented yet; see [Configuration](../getting-started/configuration.md#tls)).
 
 ## Authentication
 
-All API requests require authentication via Bearer token:
+All API requests (except health, status, init and unseal) require a bearer token:
 
 ```bash
-curl -H "Authorization: Bearer s.XXXX..." \
-  https://egide.example.com/v1/secrets/myapp/database
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8200/v1/secrets/myapp/database
 ```
 
-Or using the `X-Egide-Token` header:
-
-```bash
-curl -H "X-Egide-Token: s.XXXX..." \
-  https://egide.example.com/v1/secrets/myapp/database
-```
+The token is either the root token (plain hex, issued once at init) or a service token (`egst_<id>.<secret>`). No other header form is accepted. See [Authentication](../concepts/authentication.md).
 
 ## Content Type
 
@@ -36,16 +33,14 @@ Content-Type: application/json
 
 | Method | Usage |
 |--------|-------|
-| `GET` | Read resources |
-| `POST` | Create resources |
-| `PUT` | Update resources (full replacement) |
-| `PATCH` | Partial update |
+| `GET` | Read resources and list collections |
+| `POST` | Create resources and trigger operations |
+| `PUT` | Create or update a secret |
 | `DELETE` | Delete resources |
-| `LIST` | List resources (GET with list semantics) |
 
 ## Response Format
 
-### Success Response
+Responses are flat JSON objects specific to each endpoint (there is no generic `data`/`metadata` envelope). For example, a secret read returns:
 
 ```json
 {
@@ -54,22 +49,34 @@ Content-Type: application/json
   },
   "metadata": {
     "version": 1,
-    "created_at": "2025-01-15T10:30:00Z"
+    "created_at": 1736935800,
+    "deleted": false
   }
 }
 ```
 
-### Error Response
+while a transit encrypt returns simply `{"ciphertext": "egide:v1:..."}`.
+
+### Error Responses
+
+Two error formats exist today, depending on the endpoint family:
+
+System (`/v1/sys/*`) and secrets endpoints return a flat error object:
 
 ```json
 {
-  "errors": [
-    {
-      "code": "not_found",
-      "message": "Secret not found: myapp/database",
-      "path": "/v1/secrets/myapp/database"
-    }
-  ]
+  "error": "not found"
+}
+```
+
+Authentication failures, service-token endpoints, and transit endpoints return RFC 9457 `application/problem+json`:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "not found"
 }
 ```
 
@@ -78,45 +85,15 @@ Content-Type: application/json
 | Code | Meaning |
 |------|---------|
 | `200` | Success |
-| `201` | Created |
+| `201` | Created (service token, transit key) |
 | `204` | No Content (successful delete) |
-| `400` | Bad Request (invalid input) |
+| `400` | Bad Request (invalid input, decryption failed) |
 | `401` | Unauthorized (missing or invalid token) |
-| `403` | Forbidden (insufficient permissions) |
+| `403` | Forbidden (root-only operation, deletion not allowed) |
 | `404` | Not Found |
-| `429` | Too Many Requests (rate limited) |
+| `409` | Conflict (duplicate key, check-and-set mismatch) |
 | `500` | Internal Server Error |
 | `503` | Service Unavailable (sealed) |
-
-## Pagination
-
-List endpoints support pagination:
-
-```bash
-GET /v1/secrets?page=1&page_size=20
-```
-
-Response includes pagination metadata:
-
-```json
-{
-  "data": [...],
-  "pagination": {
-    "page": 1,
-    "page_size": 20,
-    "total": 150,
-    "total_pages": 8
-  }
-}
-```
-
-## Filtering
-
-Some endpoints support filtering:
-
-```bash
-GET /v1/secrets?prefix=myapp/
-```
 
 ## Versioning
 
@@ -124,81 +101,60 @@ API version is in the URL path: `/v1/...`
 
 Breaking changes will increment the major version.
 
-## Rate Limiting
+## Pagination, Filtering and Rate Limiting
 
-Default rate limits:
-
-| Endpoint | Limit |
-|----------|-------|
-| All endpoints | 1000 requests/minute |
-| Auth endpoints | 100 requests/minute |
-
-Rate limit headers:
-
-```http
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 950
-X-RateLimit-Reset: 1642248000
-```
+> **Status: planned, not implemented yet.** List endpoints return complete result sets; there are no `page`/`page_size`/`prefix` query parameters and no rate limiting or `X-RateLimit-*` headers today.
 
 ## API Endpoints
 
 ### System
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/sys/health` | Health check |
-| `GET /v1/sys/seal-status` | Seal status |
-| `POST /v1/sys/init` | Initialize Egide |
-| `POST /v1/sys/unseal` | Unseal Egide |
-| `POST /v1/sys/seal` | Seal Egide |
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /v1/sys/health` | none | Health check (always 200; seal state in the body) |
+| `GET /v1/sys/status` | none | Initialization and seal state |
+| `POST /v1/sys/init` | none (bootstrap) | Initialize Egide |
+| `POST /v1/sys/unseal` | none (share is the credential) | Submit one unseal share |
+| `POST /v1/sys/seal` | root | Seal Egide |
 
 ### Secrets
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/secrets/:path` | Read secret |
-| `POST /v1/secrets/:path` | Create/update secret |
-| `DELETE /v1/secrets/:path` | Delete secret |
-| `GET /v1/secrets?list=true` | List secrets |
-
-### KMS
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /v1/kms/keys` | List keys |
-| `POST /v1/kms/keys/:name` | Create key |
-| `GET /v1/kms/keys/:name` | Get key info |
-| `POST /v1/kms/keys/:name/rotate` | Rotate key |
-| `POST /v1/kms/encrypt/:name` | Encrypt data |
-| `POST /v1/kms/decrypt/:name` | Decrypt data |
-
-### PKI
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /v1/pki/root/generate` | Generate root CA |
-| `POST /v1/pki/issue` | Issue certificate |
-| `GET /v1/pki/cert/:serial` | Get certificate |
-| `POST /v1/pki/revoke` | Revoke certificate |
-| `GET /v1/pki/crl` | Get CRL |
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /v1/secrets/:path` | bearer | Read secret |
+| `PUT /v1/secrets/:path` | bearer | Create/update secret (optional `cas` guard) |
+| `DELETE /v1/secrets/:path` | bearer | Soft-delete secret |
+| `GET /v1/secrets` | bearer | List all secret paths |
 
 ### Transit
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /v1/transit/encrypt/:name` | Encrypt |
-| `POST /v1/transit/decrypt/:name` | Decrypt |
-| `POST /v1/transit/rewrap/:name` | Rewrap |
-| `POST /v1/transit/datakey/:name` | Generate datakey |
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /v1/transit/keys` | root | Create key |
+| `GET /v1/transit/keys` | bearer | List keys |
+| `GET /v1/transit/keys/:name` | bearer | Get key info |
+| `DELETE /v1/transit/keys/:name` | root | Delete key (requires `deletion_allowed`) |
+| `POST /v1/transit/keys/:name/rotate` | root | Rotate key |
+| `POST /v1/transit/encrypt/:name` | bearer | Encrypt |
+| `POST /v1/transit/decrypt/:name` | bearer | Decrypt |
+| `POST /v1/transit/rewrap/:name` | bearer | Rewrap |
+| `POST /v1/transit/datakey/:name` | bearer | Generate datakey |
 
-### Auth
+### Auth (Service Tokens)
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /v1/auth/token/create` | Create token |
-| `POST /v1/auth/token/revoke` | Revoke token |
-| `POST /v1/auth/approle/login` | AppRole login |
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /v1/auth/service-tokens` | root | Create service token |
+| `GET /v1/auth/service-tokens` | root | List service tokens |
+| `DELETE /v1/auth/service-tokens/:token_id` | root | Revoke service token |
+
+### KMS
+
+> **Status: planned for 0.3.0, not implemented yet.** No `/v1/kms/*` endpoint is served today. See [KMS API](kms.md) for the target design.
+
+### PKI
+
+> **Status: planned for 0.4.0, not implemented yet.** No `/v1/pki/*` endpoint is served today. See [PKI API](pki.md) for the target design.
 
 ## SDKs
 
@@ -213,5 +169,5 @@ Official SDKs are planned for:
 ## Next Steps
 
 - [Secrets API](secrets.md): Secrets endpoint reference
-- [KMS API](kms.md): KMS endpoint reference
+- [Transit API](transit.md): Transit endpoint reference
 - [Authentication](../concepts/authentication.md): Authentication methods

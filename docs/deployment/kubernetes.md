@@ -50,47 +50,20 @@ metadata:
     app.kubernetes.io/name: egide
 ```
 
-### ConfigMap
+### Persistent Volume Claim
 
 ```yaml
-# configmap.yaml
+# pvc.yaml
 apiVersion: v1
-kind: ConfigMap
+kind: PersistentVolumeClaim
 metadata:
-  name: egide-config
+  name: egide-data
   namespace: egide
-data:
-  egide.toml: |
-    [server]
-    bind_address = "0.0.0.0:8200"
-
-    [storage]
-    type = "postgresql"
-
-    [storage.postgresql]
-    host = "egide-postgresql"
-    port = 5432
-    database = "egide"
-    username = "egide"
-    password_env = "EGIDE_DB_PASSWORD"
-
-    [log]
-    level = "info"
-    format = "json"
-```
-
-### Secret
-
-```yaml
-# secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: egide-secrets
-  namespace: egide
-type: Opaque
-stringData:
-  db-password: "your-secure-password"
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
 ```
 
 ### Deployment
@@ -128,17 +101,13 @@ spec:
               containerPort: 8200
               protocol: TCP
           env:
-            - name: EGIDE_CONFIG
-              value: /etc/egide/egide.toml
-            - name: EGIDE_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: egide-secrets
-                  key: db-password
+            - name: EGIDE_DATA_DIR
+              value: /var/lib/egide
+            - name: EGIDE_BIND_ADDRESS
+              value: 0.0.0.0:8200
           volumeMounts:
-            - name: config
-              mountPath: /etc/egide
-              readOnly: true
+            - name: data
+              mountPath: /var/lib/egide
           livenessProbe:
             httpGet:
               path: /v1/sys/health
@@ -159,10 +128,12 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
-        - name: config
-          configMap:
-            name: egide-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: egide-data
 ```
+
+> `replicas: 3` above only makes sense once each pod has its own persistent volume, or once the (not yet implemented) PostgreSQL backend is wired in as a shared store. `egide-server` always uses its bundled SQLite backend today (see [Configuration](../getting-started/configuration.md#storage-backend)), so multiple replicas sharing one SQLite file is not a supported setup.
 
 ### Service
 
@@ -218,6 +189,8 @@ spec:
 
 ### ServiceAccount
 
+> **Status: planned, not implemented yet.** Egide does not implement a Kubernetes auth method; there is no `TokenReview` integration in the codebase today. This RBAC setup is only needed once that auth method ships. For now, provision service tokens through the REST API and inject them as Kubernetes Secrets (see [Service token provisioning](../../README.md#service-token-provisioning)).
+
 ```yaml
 # serviceaccount.yaml
 apiVersion: v1
@@ -250,6 +223,20 @@ subjects:
 ```
 
 ## PostgreSQL (StatefulSet)
+
+> **Status: planned, not implemented yet.** This section shows a PostgreSQL StatefulSet on its own; `egide-server` has no flag or environment variable to connect to it today (see [Configuration](../getting-started/configuration.md#storage-backend)). Kept here as the target shape for when runtime storage selection ships.
+
+```yaml
+# postgres-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: egide-secrets
+  namespace: egide
+type: Opaque
+stringData:
+  db-password: "your-secure-password"
+```
 
 ```yaml
 # postgresql.yaml
@@ -399,6 +386,8 @@ kubectl port-forward -n egide svc/egide 8200:8200
 
 ## Helm Values Reference
 
+> The `storage.type: postgresql` and `postgresql.*` values below describe the target shape once runtime storage selection ships (see [PostgreSQL (StatefulSet)](#postgresql-statefulset) above); `egide-server` always uses its bundled SQLite backend today.
+
 ```yaml
 # values.yaml
 replicaCount: 3
@@ -459,4 +448,4 @@ autoscaling:
 
 - [Binary Installation](./binary.md)
 - [Production Checklist](./production-checklist.md)
-- [Kubernetes Auth Method](../concepts/authentication.md#kubernetes)
+- [Authentication](../concepts/authentication.md)

@@ -42,11 +42,13 @@ With Transit Engine, your applications:
 
 ### Named Keys
 
-Transit uses named encryption keys managed in the KMS Engine:
+Transit manages its own named encryption keys directly (there is no dependency on the KMS engine, which is a separate, not-yet-implemented engine; see [KMS Engine](kms-engine.md)). Create a key through the REST API (root token required):
 
 ```bash
-# Create a transit key
-egide kms create payments-key --type aes256
+curl -s -X POST http://localhost:8200/v1/transit/keys \
+  -H "Authorization: Bearer <root-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "payments-key", "type": "aes256-gcm"}'
 ```
 
 ### Ciphertext Format
@@ -71,36 +73,36 @@ When you rotate a key:
 
 ## Operations
 
+All Transit operations are reached through the REST API (or the equivalent gRPC calls); there is no CLI support for Transit today. Plaintext is always base64-encoded in requests and responses.
+
 ### Encrypt
 
 ```bash
-# Encrypt data
-egide transit encrypt payments-key "credit-card-number"
-
-# Encrypt from file
-egide transit encrypt payments-key --input sensitive.txt
-
-# Encrypt with context (for key derivation)
-egide transit encrypt payments-key "data" --context "user-123"
+curl -s -X POST http://localhost:8200/v1/transit/encrypt/payments-key \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"plaintext": "'"$(echo -n "credit-card-number" | base64)"'"}'
 ```
 
 Output:
 
-```text
-egide:v1:AAAAAGVnaWRlAAAAEAAA...
+```json
+{"ciphertext": "egide:v1:AAAAAGVnaWRlAAAAEAAA..."}
 ```
 
 ### Decrypt
 
 ```bash
-# Decrypt data
-egide transit decrypt payments-key "egide:v1:AAAAA..."
+curl -s -X POST http://localhost:8200/v1/transit/decrypt/payments-key \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"ciphertext": "egide:v1:AAAAA..."}'
+```
 
-# Decrypt to file
-egide transit decrypt payments-key "egide:v1:AAAAA..." --output decrypted.txt
+Output:
 
-# Decrypt with context
-egide transit decrypt payments-key "egide:v1:AAAAA..." --context "user-123"
+```json
+{"plaintext": "base64-encoded-data"}
 ```
 
 ### Rewrap
@@ -108,13 +110,16 @@ egide transit decrypt payments-key "egide:v1:AAAAA..." --context "user-123"
 Upgrade ciphertext to the latest key version without exposing plaintext:
 
 ```bash
-egide transit rewrap payments-key "egide:v1:AAAAA..."
+curl -s -X POST http://localhost:8200/v1/transit/rewrap/payments-key \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"ciphertext": "egide:v1:AAAAA..."}'
 ```
 
 Output:
 
-```text
-egide:v3:BBBBB...  (now encrypted with version 3)
+```json
+{"ciphertext": "egide:v3:BBBBB..."}
 ```
 
 Use rewrap after key rotation to upgrade stored ciphertext.
@@ -124,11 +129,8 @@ Use rewrap after key rotation to upgrade stored ciphertext.
 Generate a data encryption key for client-side encryption:
 
 ```bash
-# Generate plaintext + encrypted datakey
-egide transit datakey payments-key
-
-# Generate encrypted datakey only (for storage)
-egide transit datakey payments-key --no-plaintext
+curl -s -X POST http://localhost:8200/v1/transit/datakey/payments-key \
+  -H "Authorization: Bearer <token>"
 ```
 
 Output:
@@ -148,23 +150,7 @@ Output:
 4. Discard plaintext key
 5. To decrypt: decrypt datakey with Egide, then decrypt data locally
 
-### Batch Operations
-
-Encrypt multiple items in one request:
-
-```bash
-egide transit encrypt payments-key --batch items.json
-```
-
-`items.json`:
-
-```json
-[
-  {"plaintext": "item1"},
-  {"plaintext": "item2"},
-  {"plaintext": "item3"}
-]
-```
+> **Status: planned, not implemented yet.** Batch operations (encrypting multiple items in one request), key derivation `context`, and file-based input/output are not implemented. Each Transit call handles one plaintext or ciphertext value.
 
 ## Use Cases
 
@@ -238,23 +224,13 @@ logs-encryption-key        → Sensitive logs
 ### Rotation Strategy
 
 1. Create rotation schedule (e.g., quarterly)
-2. Rotate key: `egide kms rotate <key>`
-3. Rewrap stored ciphertext in batches
+2. Rotate key: `POST /v1/transit/keys/<key>/rotate` (root-only)
+3. Rewrap stored ciphertext one at a time with `POST /v1/transit/rewrap/<key>`
 4. Monitor for old version usage
 
 ### Context for Multi-Tenancy
 
-Use context to derive tenant-specific keys:
-
-```bash
-# Tenant A
-egide transit encrypt shared-key "data" --context "tenant-a"
-
-# Tenant B
-egide transit encrypt shared-key "data" --context "tenant-b"
-```
-
-Same key, different derived keys per tenant.
+> **Status: planned, not implemented yet.** Key-derivation `context` is not implemented; use a separate named key per tenant instead.
 
 ## API Reference
 

@@ -4,7 +4,7 @@ This document describes the high-level architecture of Egide.
 
 ## Overview
 
-Egide is built as a modular system with four core engines, each handling a specific aspect of secrets and key management:
+Egide is built as a modular system with four core engines, each handling a specific aspect of secrets and key management. Two of the four engines (Secrets, Transit) are implemented today; KMS (planned 0.3.0) and PKI (planned 0.4.0) exist as placeholder crates. The diagram shows the target architecture:
 
 ```text
                     ┌─────────────────────────┐
@@ -46,21 +46,21 @@ Egide is built as a modular system with four core engines, each handling a speci
 
 ### Engines
 
-| Engine | Purpose |
-|--------|---------|
-| **Secrets Engine** | Key/Value store for sensitive data with versioning |
-| **KMS Engine** | Cryptographic key lifecycle management |
-| **PKI Engine** | Certificate Authority and certificate management |
-| **Transit Engine** | Encryption as a Service |
+| Engine | Status | Purpose |
+|--------|--------|---------|
+| **Secrets Engine** | Implemented | Key/Value store for sensitive data with versioning |
+| **Transit Engine** | Implemented | Encryption as a Service |
+| **KMS Engine** | Planned 0.3.0 | Cryptographic key lifecycle management |
+| **PKI Engine** | Planned 0.4.0 | Certificate Authority and certificate management |
 
 ### Supporting Components
 
-| Component | Purpose |
-|-----------|---------|
-| **Auth Engine** | Authentication (Token, AppRole, OIDC, mTLS) |
-| **Audit Log** | Immutable audit trail of all operations |
-| **Policy Engine** | Access control and authorization |
-| **Crypto Core** | Low-level cryptographic primitives |
+| Component | Status | Purpose |
+|-----------|--------|---------|
+| **Auth** | Implemented (root token + service tokens; AppRole planned 0.2.0, OIDC/mTLS planned) | Authentication |
+| **Audit Log** | Planned 0.2.0 | Immutable audit trail of all operations |
+| **Policy Engine** | Planned | Path-based access control (authorization today is root/non-root) |
+| **Crypto Core** | Implemented | Low-level cryptographic primitives |
 
 ## Security Model
 
@@ -101,6 +101,8 @@ Data in Egide is protected by multiple encryption layers:
 
 ### Authentication Flow
 
+Today the flow is direct bearer-token validation: the client presents the root token or a service token on every request, Egide validates it against its stored hashes, and root-only operations additionally check the root context. The login-exchange flow below (credentials in, short-lived token out, policies attached) describes the target model once AppRole (planned 0.2.0) and the policy engine (planned) ship:
+
 ```text
 Client                    Egide                    Backend
   │                         │                         │
@@ -125,23 +127,21 @@ Client                    Egide                    Backend
 
 ## Storage Architecture
 
-Egide supports pluggable storage backends:
+Egide uses a trait-based storage abstraction with pluggable backends:
 
-### SQLite (Default)
+### SQLite (the backend used today)
 
-- Single-file database
+- One database file per internal engine under the data directory
 - Ideal for development and standalone deployments
 - No external dependencies
 
 ### PostgreSQL
 
-- Production-grade reliability
-- Supports high availability with replication
-- Recommended for production
+> **Status: planned, not implemented yet.** The `egide-storage-postgres` crate exists in the workspace and is unit-tested, but `egide-server` does not yet expose a way to select it at startup (see [Configuration](../getting-started/configuration.md#storage-backend)). Once wired in, it targets production-grade reliability and high availability with replication.
 
 ### Data Model
 
-All data is stored encrypted:
+All data is stored encrypted (the `keys/` and `pki/` areas below belong to the planned KMS and PKI engines):
 
 ```text
 ┌─────────────────────────────────────────────────┐
@@ -169,8 +169,8 @@ All data is stored encrypted:
 Egide supports multi-tenant deployments with cryptographic isolation:
 
 - Each tenant has its own encryption key hierarchy
-- Data is isolated at the storage level
-- Policies control cross-tenant access (default: denied)
+- Data is isolated at the storage level (one SQLite file per tenant today)
+- Cross-tenant policy controls are planned along with the policy engine
 
 ```text
 ┌─────────────────────────────────────────────────┐
@@ -187,15 +187,15 @@ Egide supports multi-tenant deployments with cryptographic isolation:
 
 ## High Availability
 
-For production deployments, Egide can be deployed in HA mode:
-
-### Single Node (Default)
+### Single Node (the deployment supported today)
 
 - Simple deployment
 - Suitable for development and small deployments
 - No automatic failover
 
 ### Stateless + External Database
+
+> **Status: planned, not implemented yet.** This mode requires the PostgreSQL backend to be selectable at server startup, which is not the case today (see above). Target shape:
 
 - Multiple Egide instances
 - State stored in PostgreSQL

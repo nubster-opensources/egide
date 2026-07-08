@@ -1,6 +1,6 @@
 # System API
 
-The System API provides endpoints for Egide administration.
+The System API provides endpoints for Egide administration. All request and response bodies below match the implemented handlers in `egide-server`.
 
 ## Health Check
 
@@ -10,48 +10,43 @@ Check Egide health status.
 GET /v1/sys/health
 ```
 
-### Response Codes
-
-| Code | Status |
-|------|--------|
-| `200` | Unsealed, active |
-| `429` | Unsealed, standby |
-| `501` | Not initialized |
-| `503` | Sealed |
+No authentication required. Always responds `200 OK`; the HTTP status code does not vary with seal or initialization state. Inspect the body fields instead.
 
 ### Response
 
 ```json
 {
+  "status": "ok",
+  "version": "0.1.0",
   "initialized": true,
   "sealed": false,
-  "version": "0.1.0",
-  "cluster_name": "egide-cluster"
+  "uptime_secs": 42
 }
 ```
 
-## Seal Status
+## Status
 
-Get detailed seal status.
+Get the initialization and seal state.
 
 ```http
-GET /v1/sys/seal-status
+GET /v1/sys/status
 ```
 
-### Seal Status Response
+No authentication required.
+
+### Status Response
 
 ```json
 {
-  "sealed": true,
-  "threshold": 3,
-  "shares": 5,
-  "progress": 1
+  "version": "0.1.0",
+  "initialized": true,
+  "sealed": false
 }
 ```
 
 ## Initialize
 
-Initialize a new Egide instance.
+Initialize a new Egide instance. This is a bootstrap operation: no token is required (the generated shares and root token are the credentials).
 
 ```http
 POST /v1/sys/init
@@ -66,6 +61,8 @@ POST /v1/sys/init
 }
 ```
 
+Both fields are optional and default to the values shown.
+
 ### Parameters
 
 | Parameter | Type | Description |
@@ -77,22 +74,31 @@ POST /v1/sys/init
 
 ```json
 {
+  "root_token": "3e7c9a1f2b8d4560...",
   "keys": [
-    "key-share-1-base64",
-    "key-share-2-base64",
-    "key-share-3-base64",
-    "key-share-4-base64",
-    "key-share-5-base64"
+    "hex-share-1",
+    "hex-share-2",
+    "hex-share-3",
+    "hex-share-4",
+    "hex-share-5"
   ],
-  "root_token": "s.XXXXXXXXXXXX"
+  "keys_base64": [
+    "base64-share-1",
+    "base64-share-2",
+    "base64-share-3",
+    "base64-share-4",
+    "base64-share-5"
+  ]
 }
 ```
+
+The root token is plain hex (no prefix) and is shown exactly once.
 
 > **Important**: Save these keys securely. They cannot be retrieved again.
 
 ## Unseal
 
-Provide an unseal key share.
+Provide one unseal key share. No token is required (the share itself is the credential).
 
 ```http
 POST /v1/sys/unseal
@@ -102,9 +108,11 @@ POST /v1/sys/unseal
 
 ```json
 {
-  "key": "key-share-base64"
+  "key": "hex-share"
 }
 ```
+
+The share is submitted in hex encoding (the `keys` array from init).
 
 ### Unseal Response
 
@@ -112,240 +120,68 @@ POST /v1/sys/unseal
 {
   "sealed": true,
   "threshold": 3,
-  "shares": 5,
   "progress": 2
 }
 ```
 
-When threshold is reached:
+When the threshold is reached:
 
 ```json
 {
   "sealed": false,
   "threshold": 3,
-  "shares": 5,
   "progress": 0
 }
 ```
 
 ## Seal
 
-Seal Egide (requires authentication).
+Seal Egide, wiping the master key from memory. Requires the root token.
 
 ```http
 POST /v1/sys/seal
+Authorization: Bearer <root-token>
 ```
 
 ### Seal Response
 
-```http
-204 No Content
-```
-
-## Generate Root Token
-
-Generate a new root token (requires unseal keys).
-
-```http
-POST /v1/sys/generate-root/init
-```
-
-### Generate Root Token Request
-
 ```json
 {
-  "otp": "base64-one-time-password"
+  "sealed": true
 }
 ```
 
-### Generate Root Token Response
-
-```json
-{
-  "nonce": "nonce-value",
-  "progress": 0,
-  "required": 3,
-  "complete": false
-}
-```
-
-Provide key shares:
-
-```http
-POST /v1/sys/generate-root/update
-```
-
-```json
-{
-  "key": "key-share-base64",
-  "nonce": "nonce-value"
-}
-```
-
-When complete:
-
-```json
-{
-  "encoded_token": "encoded-root-token",
-  "complete": true
-}
-```
-
-## Audit Devices
-
-### List Audit Devices
-
-```http
-GET /v1/sys/audit
-```
-
-### Enable Audit Device
-
-```http
-POST /v1/sys/audit/:name
-```
-
-```json
-{
-  "type": "file",
-  "options": {
-    "path": "/var/log/egide/audit.log"
-  }
-}
-```
-
-### Disable Audit Device
-
-```http
-DELETE /v1/sys/audit/:name
-```
-
-## Policies
-
-### List Policies
-
-```http
-GET /v1/sys/policies
-```
-
-### Read Policy
-
-```http
-GET /v1/sys/policies/:name
-```
-
-### Create/Update Policy
-
-```http
-POST /v1/sys/policies/:name
-```
-
-```json
-{
-  "policy": "path \"secrets/*\" {\n  capabilities = [\"read\"]\n}"
-}
-```
-
-### Delete Policy
-
-```http
-DELETE /v1/sys/policies/:name
-```
-
-## Auth Methods
-
-### List Auth Methods
-
-```http
-GET /v1/sys/auth
-```
-
-### Enable Auth Method
-
-```http
-POST /v1/sys/auth/:path
-```
-
-```json
-{
-  "type": "approle"
-}
-```
-
-### Disable Auth Method
-
-```http
-DELETE /v1/sys/auth/:path
-```
-
-## Leases
-
-### List Leases
-
-```http
-GET /v1/sys/leases?prefix=:prefix
-```
-
-### Revoke Lease
-
-```http
-POST /v1/sys/leases/revoke
-```
-
-```json
-{
-  "lease_id": "lease-id"
-}
-```
-
-### Revoke Prefix
-
-```http
-POST /v1/sys/leases/revoke-prefix/:prefix
-```
-
-## Metrics
-
-Get Prometheus metrics.
-
-```http
-GET /metrics
-```
-
-### Metrics Response
-
-```http
-# HELP egide_requests_total Total number of requests
-# TYPE egide_requests_total counter
-egide_requests_total{method="GET",path="/v1/secrets"} 1234
-
-# HELP egide_request_duration_seconds Request duration in seconds
-# TYPE egide_request_duration_seconds histogram
-egide_request_duration_seconds_bucket{le="0.01"} 100
-...
-```
-
-## Configuration
-
-### Reload Configuration
-
-```http
-POST /v1/sys/config/reload
-```
-
-### Get Configuration
-
-```http
-GET /v1/sys/config
-```
+Returns `403` for non-root tokens and `400` if the vault is not currently unsealed.
 
 ## Errors
 
-| Code | Error | Description |
-|------|-------|-------------|
-| `400` | `already_initialized` | Egide already initialized |
-| `400` | `invalid_key` | Invalid unseal key |
-| `503` | `sealed` | Egide is sealed |
+System endpoints return errors as a flat JSON object:
+
+```json
+{
+  "error": "already initialized"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| `400` | Already initialized, invalid Shamir config, invalid or unknown unseal key, not unsealed |
+| `401` | Missing or invalid bearer token (seal only; returned as RFC 9457 `application/problem+json`) |
+| `403` | Non-root token on seal |
+| `500` | Internal error |
+
+## Planned Endpoints
+
+> **Status: planned, not implemented yet.** The following administration surfaces do not exist today and return `404`:
+>
+> - `GET /v1/sys/seal-status` (use `GET /v1/sys/status` or `/v1/sys/health` instead)
+> - `POST /v1/sys/generate-root/*` (root token regeneration; the root token is issued once at init)
+> - `GET|POST|DELETE /v1/sys/audit*` (audit devices; audit log planned for 0.2.0)
+> - `GET|POST|DELETE /v1/sys/policies*` (policy management; no policy engine exists yet)
+> - `GET|POST /v1/sys/auth*` (pluggable auth methods; AppRole planned for 0.2.0)
+> - `GET|POST /v1/sys/leases*` (lease management)
+> - `GET /metrics` (Prometheus metrics)
+> - `GET|POST /v1/sys/config*` (there is no configuration file; see [Configuration](../getting-started/configuration.md))
 
 ## Next Steps
 

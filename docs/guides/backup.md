@@ -6,20 +6,24 @@ This guide covers backup strategies and disaster recovery for Egide.
 
 | Component | Location | Backup Method |
 |-----------|----------|---------------|
-| **Database** | SQLite or PostgreSQL | Database dump |
-| **Configuration** | `/etc/egide/` | File copy |
-| **TLS Certificates** | `/etc/egide/tls/` | File copy |
+| **Data directory** | `/var/lib/egide` (`--data-dir` / `EGIDE_DATA_DIR`), SQLite files today | Directory copy |
 | **Unseal Keys** | Offline storage | Secure vault |
+
+Egide has no configuration file and does not terminate TLS itself (see [Configuration](../getting-started/configuration.md)), so there is nothing to back up under those headings. PostgreSQL as a backend is planned, not implemented yet (see [Configuration](../getting-started/configuration.md#storage-backend)); the PostgreSQL sections below describe the target procedure once it ships.
 
 ## Backup Procedures
 
-### SQLite Backup
+### SQLite Backup (the backend used today)
+
+The data directory holds one SQLite file per internal engine (for example `system.db`, `transit.db`, and one file per secrets tenant).
 
 #### Online Backup
 
 ```bash
-# Using SQLite backup command
-sqlite3 /var/lib/egide/egide.db ".backup '/backup/egide-$(date +%Y%m%d).db'"
+# Backup each database file individually with the SQLite backup command
+for db in /var/lib/egide/*.db; do
+  sqlite3 "$db" ".backup '/backup/$(basename "$db" .db)-$(date +%Y%m%d).db'"
+done
 ```
 
 #### Docker Volume Backup
@@ -40,6 +44,8 @@ docker compose start egide
 ```
 
 ### PostgreSQL Backup
+
+> **Status: planned, not implemented yet.** See the note at the top of this page.
 
 #### pg_dump
 
@@ -64,13 +70,6 @@ For point-in-time recovery, configure WAL archiving:
 ```sql
 ALTER SYSTEM SET archive_mode = on;
 ALTER SYSTEM SET archive_command = 'cp %p /backup/wal/%f';
-```
-
-### Configuration Backup
-
-```bash
-# Backup configuration files
-tar czf config-backup-$(date +%Y%m%d).tar.gz /etc/egide/
 ```
 
 ### Unseal Keys
@@ -105,17 +104,14 @@ RETENTION_DAYS=30
 # Create backup directory
 mkdir -p "$BACKUP_DIR"
 
-# Backup PostgreSQL
-pg_dump -h postgres -U egide -d egide | gzip > "$BACKUP_DIR/db-$DATE.sql.gz"
-
-# Backup configuration
-tar czf "$BACKUP_DIR/config-$DATE.tar.gz" /etc/egide/
+# Backup the data directory (SQLite, the backend used today)
+tar czf "$BACKUP_DIR/data-$DATE.tar.gz" /var/lib/egide
 
 # Remove old backups
 find "$BACKUP_DIR" -name "*.gz" -mtime +$RETENTION_DAYS -delete
 
 # Verify backup
-if [ -f "$BACKUP_DIR/db-$DATE.sql.gz" ]; then
+if [ -f "$BACKUP_DIR/data-$DATE.tar.gz" ]; then
   echo "Backup completed successfully"
 else
   echo "Backup failed" >&2
@@ -131,12 +127,12 @@ fi
 # Stop Egide
 docker compose stop egide
 
-# Restore database
+# Restore the data directory
 docker run --rm \
   -v egide-data:/data \
   -v $(pwd)/backups:/backup:ro \
   alpine \
-  cp /backup/egide-20250115.db /data/egide.db
+  sh -c "rm -rf /data/* && cp -r /backup/egide-data-20250115/. /data/"
 
 # Start Egide
 docker compose start egide
@@ -148,6 +144,8 @@ egide operator unseal KEY3
 ```
 
 ### PostgreSQL Restore
+
+> **Status: planned, not implemented yet.** See the note at the top of this page.
 
 ```bash
 # Drop and recreate database
@@ -161,17 +159,6 @@ gunzip -c backup-20250115.sql.gz | psql -h postgres -U egide -d egide
 docker compose restart egide
 
 # Unseal all instances
-```
-
-### Configuration Restore
-
-```bash
-# Extract configuration
-tar xzf config-backup-20250115.tar.gz -C /
-
-# Verify permissions
-chown -R egide:egide /etc/egide
-chmod 600 /etc/egide/tls/*.key
 ```
 
 ## Disaster Recovery
@@ -251,7 +238,7 @@ gpg --decrypt backup-20250115.sql.gz.gpg > backup-20250115.sql.gz
 gunzip -c backup.sql.gz | head -n 100
 
 # Verify SQLite backup
-sqlite3 backup.db "SELECT count(*) FROM secrets;"
+sqlite3 backup.db "SELECT count(*) FROM kv_store;"
 ```
 
 ### Restore Verification
@@ -261,7 +248,6 @@ After restoration:
 1. Check Egide status: `egide status`
 2. List secrets: `egide secrets list`
 3. Test read/write: Create and retrieve a test secret
-4. Check audit logs: Verify logging is working
 
 ## Next Steps
 
