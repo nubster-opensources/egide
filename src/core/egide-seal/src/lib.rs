@@ -523,15 +523,38 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Decodes hex to bytes.
+///
+/// Operates on bytes rather than string slice ranges, so a non-ASCII input
+/// (which may contain multi-byte UTF-8 characters) is rejected with an error
+/// instead of panicking on a misaligned char boundary.
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.is_ascii() {
+        return Err("hex string must contain only ASCII characters".into());
+    }
     if !hex.len().is_multiple_of(2) {
         return Err("odd length hex string".into());
     }
 
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| e.to_string()))
+    hex.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let high = hex_digit_value(pair[0])?;
+            let low = hex_digit_value(pair[1])?;
+            Ok((high << 4) | low)
+        })
         .collect()
+}
+
+/// Converts a single ASCII byte into its hex digit value.
+fn hex_digit_value(byte: u8) -> Result<u8, String> {
+    // `to_digit(16)` only ever returns values in 0..16, so the truncating
+    // cast to u8 is always exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let value = (byte as char)
+        .to_digit(16)
+        .map(|digit| digit as u8)
+        .ok_or_else(|| format!("invalid hex digit: {}", byte as char))?;
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -710,6 +733,39 @@ mod tests {
         let decoded = Share::from_hex(&hex).unwrap();
 
         assert_eq!(share.data, decoded.data);
+    }
+
+    #[test]
+    fn from_hex_rejects_non_ascii_input_without_panicking() {
+        // "0e0" with the middle byte replaced by a two-byte UTF-8 character.
+        // The total byte length is even, but slicing by fixed byte offsets
+        // lands mid-character, which must be rejected rather than panic.
+        let result = Share::from_hex("0\u{e9}0");
+        assert!(matches!(result, Err(SealError::InvalidShare(_))));
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_input_without_panicking() {
+        let result = hex_decode("0\u{e9}0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_hex_rejects_odd_length_input() {
+        let result = Share::from_hex("abc");
+        assert!(matches!(result, Err(SealError::InvalidShare(_))));
+    }
+
+    #[test]
+    fn from_hex_rejects_non_hex_ascii_digits() {
+        let result = Share::from_hex("zz");
+        assert!(matches!(result, Err(SealError::InvalidShare(_))));
+    }
+
+    #[test]
+    fn from_hex_rejects_empty_input() {
+        let result = Share::from_hex("");
+        assert!(matches!(result, Err(SealError::InvalidShare(_))));
     }
 
     #[tokio::test]
