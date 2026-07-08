@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on rotated secrets and blocking cross-version ciphertext splicing.
   Breaking at-rest format change: data written by earlier development builds
   is no longer decryptable.
+- Seal: malformed unseal shares (non-ASCII, odd-length or non-hex input) are
+  now rejected with `SealError::InvalidShare` instead of panicking on a
+  misaligned UTF-8 boundary, which aborted the process in release builds and
+  made unseal a denial-of-service vector.
+- Seal: dev mode now requires the explicit `EGIDE_UNSAFE_DEV_MODE=1`
+  environment marker and is categorically refused in release builds or when
+  `EGIDE_ENV=production` is set, on both the initial activation and the
+  restart-time auto-unseal of a dev-mode data directory.
+- Seal: the master key reconstruction HMAC is now compared in constant time
+  via `subtle::ConstantTimeEq` instead of a short-circuiting byte comparison.
 
 ### Changed
 - Upgraded the RustCrypto digest family to the 0.11 generation (hmac 0.13, sha2 0.11, hkdf 0.13)
