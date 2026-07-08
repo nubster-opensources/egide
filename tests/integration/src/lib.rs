@@ -747,9 +747,10 @@ mod tests {
     /// The `egide secrets put` / `egide secrets get` commands must authenticate
     /// against the server using the `Authorization: Bearer <token>` header.
     ///
-    /// Before the fix, the CLI sends `X-Egide-Token`, which the server never
-    /// reads, so both commands fail with a 401 from the server and a non-zero
-    /// CLI exit code. This test drives the real `egide` binary as a subprocess
+    /// Before the fix, the CLI sends the token in a non-standard header that
+    /// the server never reads, so both commands fail with a 401 from the
+    /// server and a non-zero CLI exit code. This test drives the real `egide`
+    /// binary as a subprocess
     /// against a real `egide-server` instance, so it proves the wire protocol
     /// end to end rather than only the internal header-building code.
     #[tokio::test]
