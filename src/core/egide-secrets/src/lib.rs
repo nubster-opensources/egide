@@ -14,10 +14,11 @@
 //!
 //! Secret data is encrypted with AES-256-GCM under a key derived per
 //! `(path, version)` pair: HKDF-SHA256 over the master key with
-//! `info = "egide-secrets-v2:{path}:{version}"`. Each version row is written
-//! exactly once, so every derived key encrypts exactly one message and the
-//! NIST SP 800-38D bound on random 96-bit nonces (2^32 messages per key) is
-//! never approached, regardless of rotation rate.
+//! `info = "egide-secrets-v2:{path}:{version}"`. Each version row is inserted
+//! exactly once, so at most one ciphertext is ever persisted per derived key;
+//! the rare transient encryptions under a reused derivation context (CAS
+//! races, purge then re-create) stay far below the NIST SP 800-38D bound on
+//! random 96-bit nonces (2^32 messages per key), regardless of rotation rate.
 //!
 //! The AEAD associated data is `"egide-secrets:{path}:{version}"`, sealing
 //! each ciphertext to its storage coordinates: moving or swapping encrypted
@@ -1150,6 +1151,19 @@ mod tests {
 
         let result = engine.get_version("app/replayed", 2).await;
         assert!(matches!(result, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_derived_keys_differ_across_versions_and_paths() {
+        let (_tmp, engine) = setup().await;
+
+        let key_v1 = engine.derive_secret_key("app/kdf", 1).unwrap();
+        let key_v2 = engine.derive_secret_key("app/kdf", 2).unwrap();
+        let key_other_path = engine.derive_secret_key("app/kdf-other", 1).unwrap();
+
+        assert_ne!(key_v1.as_bytes(), key_v2.as_bytes());
+        assert_ne!(key_v1.as_bytes(), key_other_path.as_bytes());
+        assert_ne!(key_v2.as_bytes(), key_other_path.as_bytes());
     }
 
     #[tokio::test]
