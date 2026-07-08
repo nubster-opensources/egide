@@ -24,17 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-06-15
 
-First public release. Egide provides a self-hosted KMS, Secrets Manager and
-Private CA, with a REST and gRPC server, native service tokens, Shamir-based
-seal/unseal, and SQLite and PostgreSQL storage backends.
+First public release. Egide provides a self-hosted Secrets Manager and Transit
+encryption as a service, with a REST and gRPC server, native service tokens,
+Shamir-based seal/unseal, and SQLite and PostgreSQL storage backends. The KMS
+and PKI engines are planned (see ROADMAP.md); their crates ship as
+placeholders with error types only.
 
 ### Added
 - Initial workspace structure and crate layout
 - Core cryptographic primitives (`egide-crypto`)
 - Secrets Engine (`egide-secrets`)
-- KMS Engine (`egide-kms`)
-- PKI Engine (`egide-pki`)
 - Transit Engine (`egide-transit`)
+- Placeholder crates for the planned KMS and PKI engines (`egide-kms`, `egide-pki`)
 - Storage abstraction with PostgreSQL and SQLite backends
 - REST API layer (`egide-api`)
 - Authentication framework (`egide-auth`)
@@ -43,5 +44,4 @@ seal/unseal, and SQLite and PostgreSQL storage backends.
 
 ### Security
 - AES-256-GCM for symmetric encryption
-- RSA, ECDSA, Ed25519 for asymmetric operations
 - Shamir's Secret Sharing for master key protection

@@ -1,5 +1,7 @@
 # KMS Engine
 
+> **Status: planned for 0.3.0, not implemented yet.** This page describes the target design. The `egide-kms` crate currently ships as a placeholder and no `/v1/kms/*` endpoint is served.
+
 The KMS (Key Management Service) Engine manages cryptographic keys and performs encryption operations.
 
 ## Overview

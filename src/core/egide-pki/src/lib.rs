@@ -2,7 +2,12 @@
 //!
 //! Public Key Infrastructure for certificate management.
 //!
-//! ## Features
+//! ## Status
+//!
+//! This crate is a placeholder: only the error types exist today. The engine
+//! itself is planned for the 0.4.0 release.
+//!
+//! ## Planned features
 //!
 //! - Root and Intermediate Certificate Authority
 //! - TLS/mTLS certificate issuance
