@@ -552,44 +552,6 @@ fn verify_token(token: &str, hash: &str) -> bool {
 }
 
 /// Encodes bytes as lowercase hex.
-/// Returns true when the operator explicitly opted into dev mode for this
-/// process via [`DEV_MODE_GUARD_ENV`].
-fn explicit_dev_mode_guard_is_set() -> bool {
-    std::env::var(DEV_MODE_GUARD_ENV).is_ok_and(|value| value == "1")
-}
-
-/// Returns true when this is a release build or an explicit production
-/// marker is present via [`PRODUCTION_ENV_MARKER`].
-fn production_marker_is_present() -> bool {
-    cfg!(not(debug_assertions))
-        || std::env::var(PRODUCTION_ENV_MARKER)
-            .is_ok_and(|value| value.eq_ignore_ascii_case(PRODUCTION_ENV_VALUE))
-}
-
-/// Decides whether dev mode may be activated, given the resolved guard
-/// state.
-///
-/// Kept separate from environment access so the decision logic can be
-/// exercised directly in tests without mutating process environment
-/// variables, which requires `unsafe` code since Rust 1.82 and this crate
-/// forbids unsafe code entirely.
-fn ensure_dev_mode_allowed(
-    explicit_guard_present: bool,
-    production_marker_present: bool,
-) -> Result<(), SealError> {
-    if production_marker_present {
-        return Err(SealError::DevModeForbidden(
-            "a release or production build marker is present".into(),
-        ));
-    }
-    if !explicit_guard_present {
-        return Err(SealError::DevModeForbidden(format!(
-            "set {DEV_MODE_GUARD_ENV}=1 to explicitly opt into dev mode"
-        )));
-    }
-    Ok(())
-}
-
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(bytes.len() * 2);
@@ -633,6 +595,49 @@ fn hex_digit_value(byte: u8) -> Result<u8, String> {
         .map(|digit| digit as u8)
         .ok_or_else(|| format!("invalid hex digit: {}", byte as char))?;
     Ok(value)
+}
+
+/// Returns true when the operator explicitly opted into dev mode for this
+/// process via [`DEV_MODE_GUARD_ENV`].
+fn explicit_dev_mode_guard_is_set() -> bool {
+    std::env::var(DEV_MODE_GUARD_ENV).is_ok_and(|value| value == "1")
+}
+
+/// Returns true when dev mode must be refused because the process runs in
+/// a production configuration.
+///
+/// Release builds categorically refuse dev mode: `cfg!(not(debug_assertions))`
+/// makes the marker unconditionally present in any optimized build, and no
+/// environment variable can override it. Debug builds additionally treat an
+/// explicit `EGIDE_ENV=production` marker as production.
+fn production_marker_is_present() -> bool {
+    cfg!(not(debug_assertions))
+        || std::env::var(PRODUCTION_ENV_MARKER)
+            .is_ok_and(|value| value.eq_ignore_ascii_case(PRODUCTION_ENV_VALUE))
+}
+
+/// Decides whether dev mode may be activated, given the resolved guard
+/// state.
+///
+/// Kept separate from environment access so the decision logic can be
+/// exercised directly in tests without mutating process environment
+/// variables, which requires `unsafe` code since Rust 1.82 and this crate
+/// forbids unsafe code entirely.
+fn ensure_dev_mode_allowed(
+    explicit_guard_present: bool,
+    production_marker_present: bool,
+) -> Result<(), SealError> {
+    if production_marker_present {
+        return Err(SealError::DevModeForbidden(
+            "a release or production build marker is present".into(),
+        ));
+    }
+    if !explicit_guard_present {
+        return Err(SealError::DevModeForbidden(format!(
+            "set {DEV_MODE_GUARD_ENV}=1 to explicitly opt into dev mode"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
