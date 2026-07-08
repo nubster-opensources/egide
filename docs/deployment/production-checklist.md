@@ -6,7 +6,7 @@ Use this checklist before deploying Egide to production.
 
 ### Authentication & Access
 
-- [ ] **Disable dev mode**: `EGIDE_DEV_MODE=false`
+- [ ] **Dev mode is refused by design**: release builds, including this Docker image, refuse dev mode categorically. As defense in depth, ensure `EGIDE_UNSAFE_DEV_MODE` is not set and set `EGIDE_ENV=production`
 - [ ] **Change root token** : Revoke initial root token after setup
 - [ ] **Enable authentication** : Configure auth methods (Token, AppRole, OIDC)
 - [ ] **Set up policies** : Define least-privilege access policies

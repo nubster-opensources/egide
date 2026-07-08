@@ -43,7 +43,7 @@ Out of scope:
 
 When deploying Egide:
 
-1. **Never run in dev mode in production**
+1. **Never run in dev mode in production** (release builds, including the published Docker image, refuse dev mode by design)
 2. **Use TLS for all connections**
 3. **Rotate unseal keys regularly**
 4. **Enable audit logging**

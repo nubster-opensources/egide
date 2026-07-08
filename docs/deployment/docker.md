@@ -4,32 +4,7 @@ Deploy Egide using Docker for quick setup and development.
 
 ## Quick Start
 
-### Development Mode
-
-```bash
-docker run -d \
-  --name egide \
-  -p 8200:8200 \
-  -e EGIDE_DEV_MODE=true \
-  nubster/egide:latest
-```
-
-In dev mode:
-
-- Automatically initialized and unsealed
-- Root token printed to logs
-- In-memory storage (data lost on restart)
-- **Not for production!**
-
-### Get Root Token
-
-```bash
-docker logs egide 2>&1 | grep "Root Token"
-```
-
-## Production Mode
-
-### With Persistent Storage
+Start Egide with a persistent volume. The published image is a release build, so it always starts sealed and refuses dev mode by design.
 
 ```bash
 docker run -d \
@@ -51,13 +26,15 @@ docker exec egide egide operator init
 docker exec egide egide operator unseal
 ```
 
+> Dev mode is a development convenience for contributors running a debug build locally: `EGIDE_UNSAFE_DEV_MODE=1 cargo run -p egide-server -- --dev`. It stores the master key in cleartext and is refused categorically by release builds, including this image. See the [production checklist](./production-checklist.md).
+
 ## Configuration
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EGIDE_DEV_MODE` | Enable development mode | `false` |
+| `EGIDE_DEV_MODE` | Enable development mode (also requires `EGIDE_UNSAFE_DEV_MODE=1`; refused by release builds, including this image) | `false` |
 | `EGIDE_LOG_LEVEL` | Logging level | `info` |
 | `EGIDE_BIND_ADDRESS` | Server bind address | `0.0.0.0:8200` |
 | `EGIDE_STORAGE_TYPE` | Storage backend | `sqlite` |

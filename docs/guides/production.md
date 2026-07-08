@@ -7,7 +7,7 @@ Best practices for deploying Egide in production.
 Before going to production, ensure:
 
 - [ ] TLS is enabled
-- [ ] Dev mode is disabled
+- [ ] Dev mode is not enabled (refused by release builds by design; confirm `EGIDE_UNSAFE_DEV_MODE` is unset and `EGIDE_ENV=production`)
 - [ ] Unseal keys are stored securely
 - [ ] Root token is revoked
 - [ ] Backup strategy is in place
@@ -17,14 +17,9 @@ Before going to production, ensure:
 
 ## Security Hardening
 
-### Disable Dev Mode
+### Dev Mode
 
-Never use dev mode in production:
-
-```toml
-[server]
-dev_mode = false
-```
+Release builds, including the published Docker image, refuse dev mode by design: there is no configuration flag to disable, because it cannot be enabled in the first place. Dev mode exists only in debug builds and requires both `EGIDE_UNSAFE_DEV_MODE=1` and the absence of `EGIDE_ENV=production`. As defense in depth in production, set `EGIDE_ENV=production` and ensure `EGIDE_UNSAFE_DEV_MODE` is not set.
 
 ### Enable TLS
 

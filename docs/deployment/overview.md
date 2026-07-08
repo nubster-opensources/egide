@@ -19,9 +19,11 @@ The fastest way to get started.
 docker run -d \
   --name egide \
   -p 8200:8200 \
-  -e EGIDE_DEV_MODE=true \
+  -v egide-data:/var/lib/egide \
   nubster/egide:latest
 ```
+
+The container starts sealed by design (release builds refuse dev mode); initialize and unseal it as shown in the [Quick Start](../getting-started/quick-start.md).
 
 **Use case:** Development, testing, evaluation.
 
@@ -115,7 +117,7 @@ sudo mv egide-server egide /usr/local/bin/
                     │                                     │
      ┌──────────┐   │   ┌──────────────┐   ┌───────────┐│
      │  Docker  │   │   │Docker Compose│   │Kubernetes ││
-     │(Dev mode)│   │   │ + PostgreSQL │   │  + Helm   ││
+     │ (Sealed) │   │   │ + PostgreSQL │   │  + Helm   ││
      └──────────┘   │   └──────────────┘   └───────────┘│
          │         │          │                  │      │
          ▼         │          ▼                  ▼      │

@@ -26,7 +26,6 @@ services:
     ports:
       - "8200:8200"
     environment:
-      - EGIDE_DEV_MODE=true
       - EGIDE_LOG_LEVEL=debug
     volumes:
       - egide-data:/var/lib/egide
@@ -40,6 +39,15 @@ Start:
 ```bash
 docker compose up -d
 ```
+
+The container starts sealed. Initialize and unseal it once:
+
+```bash
+docker compose exec egide egide operator init
+docker compose exec egide egide operator unseal
+```
+
+Dev mode (`EGIDE_DEV_MODE`) is a debug-build-only convenience for contributors and is refused by this release image regardless. See the [production checklist](../deployment/production-checklist.md) for the guard semantics.
 
 ### Production Setup
 
@@ -93,7 +101,7 @@ docker compose -f docker-compose.prod.yml up -d
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `EGIDE_CONFIG` | Config file path | `/etc/egide/egide.toml` |
-| `EGIDE_DEV_MODE` | Enable dev mode | `false` |
+| `EGIDE_DEV_MODE` | Enable dev mode (also requires `EGIDE_UNSAFE_DEV_MODE=1`; refused by release builds, including this image) | `false` |
 | `EGIDE_LOG_LEVEL` | Log level | `info` |
 | `EGIDE_BIND_ADDRESS` | Bind address | `0.0.0.0:8200` |
 
