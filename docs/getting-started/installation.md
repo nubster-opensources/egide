@@ -35,9 +35,8 @@ services:
       - "8200:8200"
     volumes:
       - egide-data:/var/lib/egide
-      - ./config:/etc/egide:ro
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
+      - EGIDE_DATA_DIR=/var/lib/egide
     restart: unless-stopped
 
 volumes:

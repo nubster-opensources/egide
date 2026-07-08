@@ -2,9 +2,11 @@
 
 This guide covers deploying Egide in a highly available configuration.
 
+> **Status: planned, not implemented yet.** Multi-instance HA needs a storage backend shared across instances. `egide-server` always uses its bundled SQLite backend today (one file per node); the `egide-storage-postgres` crate exists in the workspace but is not wired into the server's startup yet (no flag or environment variable selects it). This page describes the target architecture. See [Configuration](../getting-started/configuration.md#storage-backend).
+
 ## Overview
 
-Egide supports high availability through:
+Egide's planned high availability model relies on:
 
 1. **Stateless deployment** with external PostgreSQL
 2. **Multiple instances** behind a load balancer
@@ -68,33 +70,15 @@ Configure streaming replication to the replica for failover.
 
 ## Egide Configuration
 
-All instances use the same configuration:
+All instances would use the same flags and environment variables (see [Configuration](../getting-started/configuration.md)):
 
-```toml
-[server]
-bind = "0.0.0.0:8200"
-tls_enabled = true
-tls_cert_file = "/etc/egide/tls/server.crt"
-tls_key_file = "/etc/egide/tls/server.key"
-
-[storage]
-backend = "postgres"
-
-[storage.postgres]
-host = "postgres-primary.internal"
-port = 5432
-database = "egide"
-username = "egide"
-password = "${POSTGRES_PASSWORD}"
-ssl_mode = "require"
-# Connection pool
-max_connections = 20
-min_connections = 5
-
-[logging]
-level = "info"
-format = "json"
+```bash
+EGIDE_BIND_ADDRESS=0.0.0.0:8200
+EGIDE_GRPC_BIND=0.0.0.0:8201
+RUST_LOG=info
 ```
+
+TLS is terminated at the load balancer, not by Egide (see [Production Deployment](production.md#tls)). PostgreSQL connection settings (`host`, `port`, `database`, credentials) have no environment variable today, since the backend is not yet selectable at runtime.
 
 ## Load Balancer
 
@@ -154,11 +138,7 @@ services:
     image: nubster/egide:latest
     hostname: egide1
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ./config:/etc/egide:ro
-      - ./certs:/etc/egide/tls:ro
     networks:
       - egide-net
     deploy:
@@ -172,11 +152,7 @@ services:
     image: nubster/egide:latest
     hostname: egide2
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ./config:/etc/egide:ro
-      - ./certs:/etc/egide/tls:ro
     networks:
       - egide-net
     deploy:
@@ -190,11 +166,7 @@ services:
     image: nubster/egide:latest
     hostname: egide3
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ./config:/etc/egide:ro
-      - ./certs:/etc/egide/tls:ro
     networks:
       - egide-net
     deploy:
@@ -261,23 +233,19 @@ Auto-unseal with external KMS is planned for future releases.
 
 `GET /v1/sys/health`
 
-### Response Codes
+Always responds `200 OK`; the HTTP status code does not vary with seal or initialization state today. Inspect the JSON body's `sealed` and `initialized` fields to distinguish an unsealed-and-ready instance from a sealed one:
 
-| Code | Status |
-|------|--------|
-| 200 | Unsealed, active |
-| 429 | Unsealed, standby |
-| 472 | Disaster recovery standby |
-| 473 | Performance standby |
-| 501 | Not initialized |
-| 503 | Sealed |
+```json
+{"status": "ok", "initialized": true, "sealed": false, "version": "0.1.0", "uptime_secs": 42}
+```
 
 ### Health Check Script
 
 ```bash
 #!/bin/bash
-response=$(curl -s -o /dev/null -w "%{http_code}" https://egide:8200/v1/sys/health)
-if [ "$response" = "200" ]; then
+body=$(curl -s https://egide:8200/v1/sys/health)
+sealed=$(echo "$body" | jq -r .sealed)
+if [ "$sealed" = "false" ]; then
   exit 0
 else
   exit 1

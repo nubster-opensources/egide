@@ -18,10 +18,9 @@ services:
       - "8200:8200"
     volumes:
       - egide_data:/var/lib/egide
-      - ./config:/etc/egide:ro
     environment:
-      - EGIDE_STORAGE_TYPE=sqlite
-      - EGIDE_LOG_LEVEL=info
+      - EGIDE_DATA_DIR=/var/lib/egide
+      - RUST_LOG=info
     healthcheck:
       test: ["CMD", "egide", "status"]
       interval: 30s
@@ -38,6 +37,8 @@ docker compose up -d
 
 ## Production Setup with PostgreSQL
 
+> **Status: planned, not implemented yet.** `egide-server` always uses its bundled SQLite backend today; there is no environment variable or configuration file to switch it to PostgreSQL, even though the `egide-storage-postgres` crate exists in the workspace and is unit-tested. See [Configuration](../getting-started/configuration.md#storage-backend). The compose file below shows the target shape for when runtime storage selection ships.
+
 ### docker-compose.yml
 
 ```yaml
@@ -49,11 +50,9 @@ services:
     ports:
       - "8200:8200"
     volumes:
-      - ./config/egide.toml:/etc/egide/egide.toml:ro
-      - ./certs:/etc/egide/certs:ro
+      - egide_data:/var/lib/egide
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
-      - EGIDE_DB_PASSWORD=${EGIDE_DB_PASSWORD}
+      - EGIDE_DATA_DIR=/var/lib/egide
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,36 +80,8 @@ services:
       retries: 5
 
 volumes:
+  egide_data:
   postgres_data:
-```
-
-### config/egide.toml
-
-```toml
-[server]
-bind_address = "0.0.0.0:8200"
-tls_enabled = true
-tls_cert = "/etc/egide/certs/tls.crt"
-tls_key = "/etc/egide/certs/tls.key"
-
-[storage]
-type = "postgresql"
-
-[storage.postgresql]
-host = "postgres"
-port = 5432
-database = "egide"
-username = "egide"
-password_env = "EGIDE_DB_PASSWORD"
-pool_max = 20
-ssl_mode = "disable"  # Internal network
-
-[log]
-level = "info"
-format = "json"
-
-[audit]
-enabled = true
 ```
 
 ### .env
@@ -167,7 +138,7 @@ services:
     volumes:
       - egide_data:/var/lib/egide
     environment:
-      - EGIDE_STORAGE_TYPE=sqlite
+      - EGIDE_DATA_DIR=/var/lib/egide
     depends_on:
       - traefik
 
@@ -177,6 +148,8 @@ volumes:
 ```
 
 ## High Availability Setup
+
+> **Status: planned, not implemented yet.** Multiple Egide instances sharing one datastore requires the PostgreSQL backend to be wired into `egide-server`, which is not the case today (see [Configuration](../getting-started/configuration.md#storage-backend)). The compose file below shows the target shape.
 
 ### Multi-instance with Load Balancer
 
@@ -198,10 +171,7 @@ services:
     image: nubster/egide:latest
     container_name: egide-1
     restart: unless-stopped
-    volumes:
-      - ./config:/etc/egide:ro
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
       - EGIDE_DB_PASSWORD=${EGIDE_DB_PASSWORD}
     depends_on:
       - postgres
@@ -210,10 +180,7 @@ services:
     image: nubster/egide:latest
     container_name: egide-2
     restart: unless-stopped
-    volumes:
-      - ./config:/etc/egide:ro
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
       - EGIDE_DB_PASSWORD=${EGIDE_DB_PASSWORD}
     depends_on:
       - postgres
@@ -302,12 +269,13 @@ docker compose exec egide egide operator unseal
 ### Backup
 
 ```bash
-# PostgreSQL
+# PostgreSQL (once the backend is wired in, see above)
 docker compose exec postgres pg_dump -U egide egide > backup.sql
 
-# SQLite
-docker compose exec egide egide operator backup --output /tmp/backup.enc
-docker compose cp egide:/tmp/backup.enc ./backup/
+# SQLite (the backend used today): copy the data directory
+docker compose stop egide
+docker compose cp egide:/var/lib/egide ./backup/
+docker compose start egide
 ```
 
 ### Upgrade
@@ -325,40 +293,7 @@ docker compose exec egide egide operator unseal
 
 ## Monitoring
 
-### With Prometheus
-
-Add to docker-compose.yml:
-
-```yaml
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-```
-
-### prometheus.yml
-
-```yaml
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'egide'
-    static_configs:
-      - targets: ['egide:8200']
-    metrics_path: '/v1/sys/metrics'
-```
+> **Status: planned, not implemented yet.** Egide does not expose a Prometheus metrics endpoint today. Until it does, monitor the `GET /v1/sys/health` endpoint and the container's `tracing` logs.
 
 ## Security Hardening
 

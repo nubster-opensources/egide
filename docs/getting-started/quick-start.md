@@ -29,28 +29,41 @@ This outputs:
 - **Unseal Keys**: keep these safe! You need them to unseal Egide after restart.
 - **Root Token**: initial admin token. Revoke after creating other tokens.
 
-Example output:
+Example output (5 shares, threshold 3, keys abbreviated):
 
 ```text
-Unseal Key 1: AAAA...
-Unseal Key 2: BBBB...
-Unseal Key 3: CCCC...
-Unseal Key 4: DDDD...
-Unseal Key 5: EEEE...
+Initializing Egide with 5 shares, threshold 3...
 
-Initial Root Token: s.XXXX...
+Egide initialized successfully!
 
-Egide initialized with 5 key shares and a threshold of 3.
+Unseal Keys (hex):
+  Key 1: 7a3f...
+  Key 2: c91e...
+  Key 3: 4b02...
+  Key 4: f8d1...
+  Key 5: 05a9...
+
+Unseal Keys (base64):
+  Key 1: ej8...
+  Key 2: yR4...
+  Key 3: SwI...
+  Key 4: +NE...
+  Key 5: Bak...
+
+Root Token: 3e7c9a1f2b8d4560...
+
+IMPORTANT: Save these keys securely! They are required to unseal Egide.
+The root token is needed for administrative operations.
 ```
 
 ## 3. Unseal Egide
 
-Egide starts sealed. Unseal it with the threshold number of keys:
+Egide starts sealed. Unseal it with the threshold number of keys (one key per invocation):
 
 ```bash
-egide operator unseal AAAA...
-egide operator unseal BBBB...
-egide operator unseal CCCC...
+egide operator unseal 7a3f...
+egide operator unseal c91e...
+egide operator unseal 4b02...
 ```
 
 After the third key, Egide is unsealed and ready.
@@ -100,29 +113,40 @@ Output:
 
 ## 7. Use Transit Encryption
 
-Create an encryption key:
+The CLI covers operator and secrets commands only. The Transit engine (encryption as a service) is reached through the REST API. Create a key (root token required):
 
 ```bash
-egide kms create my-key --type aes256
+curl -s -X POST http://localhost:8200/v1/transit/keys \
+  -H "Authorization: Bearer $EGIDE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-key", "type": "aes256-gcm"}'
 ```
 
-Encrypt data:
+Encrypt data (any authenticated token can use an existing key):
 
 ```bash
-echo "sensitive data" | egide transit encrypt my-key
+curl -s -X POST http://localhost:8200/v1/transit/encrypt/my-key \
+  -H "Authorization: Bearer $EGIDE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"plaintext": "'"$(echo -n "sensitive data" | base64)"'"}'
 ```
 
 Output:
 
-```text
-egide:v1:XXXXXXXXXXXXXXXXXXXXXXXX
+```json
+{"ciphertext": "egide:v1:XXXXXXXXXXXXXXXXXXXXXXXX"}
 ```
 
 Decrypt:
 
 ```bash
-egide transit decrypt my-key "egide:v1:XXXXXXXXXXXXXXXXXXXXXXXX"
+curl -s -X POST http://localhost:8200/v1/transit/decrypt/my-key \
+  -H "Authorization: Bearer $EGIDE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"ciphertext": "egide:v1:XXXXXXXXXXXXXXXXXXXXXXXX"}'
 ```
+
+The response carries the plaintext base64-encoded: `{"plaintext": "..."}`.
 
 ## Next Steps
 

@@ -61,13 +61,10 @@ services:
     ports:
       - "8200:8200"
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
-      - EGIDE_LOG_LEVEL=info
+      - EGIDE_DATA_DIR=/var/lib/egide
+      - RUST_LOG=info
     volumes:
       - egide-data:/var/lib/egide
-      - egide-logs:/var/log/egide
-      - ./config:/etc/egide:ro
-      - ./certs:/etc/egide/tls:ro
     healthcheck:
       test: ["CMD", "egide", "status"]
       interval: 30s
@@ -85,7 +82,6 @@ services:
 
 volumes:
   egide-data:
-  egide-logs:
 ```
 
 Start:
@@ -96,58 +92,29 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## Configuration
 
+Egide is configured via CLI flags or environment variables only; there is no configuration file (see [Configuration](../getting-started/configuration.md)).
+
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EGIDE_CONFIG` | Config file path | `/etc/egide/egide.toml` |
+| `EGIDE_DATA_DIR` | Data directory (SQLite database files) | `./data` |
 | `EGIDE_DEV_MODE` | Enable dev mode (also requires `EGIDE_UNSAFE_DEV_MODE=1`; refused by release builds, including this image) | `false` |
-| `EGIDE_LOG_LEVEL` | Log level | `info` |
-| `EGIDE_BIND_ADDRESS` | Bind address | `0.0.0.0:8200` |
+| `RUST_LOG` | Log filter (e.g. `info`, `info,egide=debug`) | `info,egide=debug` |
+| `EGIDE_BIND_ADDRESS` | REST bind address | `0.0.0.0:8200` |
+| `EGIDE_GRPC_BIND` | gRPC bind address | `0.0.0.0:8201` |
 
 ### Volumes
 
 | Path | Purpose |
 |------|---------|
-| `/var/lib/egide` | Data storage (SQLite database) |
-| `/var/log/egide` | Log files |
-| `/etc/egide` | Configuration files |
-| `/etc/egide/tls` | TLS certificates |
+| `/var/lib/egide` | Data storage (SQLite database files) |
 
-### Configuration File
+## TLS
 
-Mount a configuration file:
+> **Status: planned, not implemented yet.** Egide does not terminate TLS itself. Put a reverse proxy (Traefik, nginx, Caddy) in front of the container and terminate TLS there.
 
-```yaml
-volumes:
-  - ./egide.toml:/etc/egide/egide.toml:ro
-```
-
-Example `egide.toml`:
-
-```toml
-[server]
-bind = "0.0.0.0:8200"
-tls_enabled = true
-tls_cert_file = "/etc/egide/tls/server.crt"
-tls_key_file = "/etc/egide/tls/server.key"
-
-[storage]
-backend = "sqlite"
-
-[storage.sqlite]
-path = "/var/lib/egide/egide.db"
-
-[logging]
-level = "info"
-format = "json"
-```
-
-## TLS Configuration
-
-### Self-Signed Certificate
-
-Generate certificates:
+Generate a self-signed certificate for the reverse proxy in local testing:
 
 ```bash
 mkdir -p certs
@@ -155,13 +122,6 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout certs/server.key \
   -out certs/server.crt \
   -subj "/CN=egide.local"
-```
-
-Mount certificates:
-
-```yaml
-volumes:
-  - ./certs:/etc/egide/tls:ro
 ```
 
 ### Let's Encrypt with Traefik
@@ -190,47 +150,18 @@ services:
       - "traefik.http.routers.egide.tls.certresolver=letsencrypt"
       - "traefik.http.services.egide.loadbalancer.server.port=8200"
     environment:
-      - EGIDE_CONFIG=/etc/egide/egide.toml
+      - EGIDE_DATA_DIR=/var/lib/egide
+    volumes:
+      - egide_data:/var/lib/egide
 
 volumes:
   letsencrypt:
+  egide_data:
 ```
 
 ## PostgreSQL Backend
 
-For production, use PostgreSQL:
-
-```yaml
-services:
-  egide:
-    image: nubster/egide:latest
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      - EGIDE_STORAGE_BACKEND=postgres
-      - EGIDE_POSTGRES_HOST=postgres
-      - EGIDE_POSTGRES_DATABASE=egide
-      - EGIDE_POSTGRES_USERNAME=egide
-      - EGIDE_POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_DB=egide
-      - POSTGRES_USER=egide
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U egide"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  postgres-data:
-```
+> **Status: planned, not implemented yet.** `egide-server` always uses its bundled SQLite backend today; there is no environment variable or flag that switches it to PostgreSQL, even though the `egide-storage-postgres` crate exists in the workspace. See [Configuration](../getting-started/configuration.md#storage-backend).
 
 ## Initialization
 
@@ -295,51 +226,27 @@ docker logs egide | jq .
 
 ### Prometheus Metrics
 
-Egide exposes metrics at `/metrics`:
-
-```yaml
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-
-  egide:
-    # ... existing config
-```
-
-`prometheus.yml`:
-
-```yaml
-scrape_configs:
-  - job_name: egide
-    static_configs:
-      - targets: ['egide:8200']
-```
+> **Status: planned, not implemented yet.** Egide does not expose a `/metrics` endpoint today.
 
 ## Backup
 
 ### SQLite
 
+The data directory holds one SQLite file per internal engine (for example `system.db`, `transit.db`, and one file per secrets tenant). Back up the whole directory:
+
 ```bash
 # Stop Egide
 docker compose stop egide
 
-# Backup database
+# Backup the data directory
 docker run --rm \
   -v egide-data:/data \
   -v $(pwd)/backups:/backup \
   alpine \
-  cp /data/egide.db /backup/egide-$(date +%Y%m%d).db
+  sh -c "cp -r /data /backup/egide-$(date +%Y%m%d)"
 
 # Start Egide
 docker compose start egide
-```
-
-### PostgreSQL
-
-```bash
-docker exec postgres pg_dump -U egide egide > backup.sql
 ```
 
 ## Upgrade

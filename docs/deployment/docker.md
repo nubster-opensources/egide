@@ -11,8 +11,7 @@ docker run -d \
   --name egide \
   -p 8200:8200 \
   -v egide_data:/var/lib/egide \
-  -e EGIDE_STORAGE_TYPE=sqlite \
-  -e EGIDE_STORAGE_PATH=/var/lib/egide/egide.db \
+  -e EGIDE_DATA_DIR=/var/lib/egide \
   nubster/egide:latest
 ```
 
@@ -30,37 +29,25 @@ docker exec egide egide operator unseal
 
 ## Configuration
 
+Egide is configured via CLI flags or environment variables only; there is no configuration file (see [Configuration](../getting-started/configuration.md)).
+
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `EGIDE_DEV_MODE` | Enable development mode (also requires `EGIDE_UNSAFE_DEV_MODE=1`; refused by release builds, including this image) | `false` |
-| `EGIDE_LOG_LEVEL` | Logging level | `info` |
-| `EGIDE_BIND_ADDRESS` | Server bind address | `0.0.0.0:8200` |
-| `EGIDE_STORAGE_TYPE` | Storage backend | `sqlite` |
-| `EGIDE_STORAGE_PATH` | SQLite database path | `/var/lib/egide/egide.db` |
-| `EGIDE_TLS_ENABLED` | Enable TLS | `false` |
-| `EGIDE_TLS_CERT` | TLS certificate path | - |
-| `EGIDE_TLS_KEY` | TLS private key path | - |
+| `RUST_LOG` | Log filter (e.g. `info`, `info,egide=debug`) | `info,egide=debug` |
+| `EGIDE_BIND_ADDRESS` | REST bind address | `0.0.0.0:8200` |
+| `EGIDE_GRPC_BIND` | gRPC bind address | `0.0.0.0:8201` |
+| `EGIDE_DATA_DIR` | Data directory (SQLite database files) | `./data` |
 
-### Using Config File
-
-```bash
-docker run -d \
-  --name egide \
-  -p 8200:8200 \
-  -v ./egide.toml:/etc/egide/egide.toml:ro \
-  -v egide_data:/var/lib/egide \
-  nubster/egide:latest
-```
+> Egide always uses its bundled SQLite backend today; there is no environment variable to select PostgreSQL at runtime (see [Configuration](../getting-started/configuration.md#storage-backend)).
 
 ## Volumes
 
 | Path | Description |
 |------|-------------|
-| `/var/lib/egide` | Data directory (SQLite, files) |
-| `/etc/egide` | Configuration directory |
-| `/var/log/egide` | Log files |
+| `/var/lib/egide` | Data directory (SQLite database files) |
 
 ## Networking
 
@@ -85,33 +72,9 @@ docker run -d \
   nubster/egide:latest
 ```
 
-## TLS Configuration
+## TLS
 
-### Self-Signed Certificate
-
-```bash
-# Generate certificate
-openssl req -x509 -nodes -days 365 \
-  -newkey rsa:2048 \
-  -keyout egide.key \
-  -out egide.crt \
-  -subj "/CN=egide"
-
-# Run with TLS
-docker run -d \
-  --name egide \
-  -p 8200:8200 \
-  -v $(pwd)/egide.crt:/etc/egide/tls.crt:ro \
-  -v $(pwd)/egide.key:/etc/egide/tls.key:ro \
-  -e EGIDE_TLS_ENABLED=true \
-  -e EGIDE_TLS_CERT=/etc/egide/tls.crt \
-  -e EGIDE_TLS_KEY=/etc/egide/tls.key \
-  nubster/egide:latest
-```
-
-### With Let's Encrypt
-
-Use a reverse proxy (Traefik, Caddy, nginx) for automatic TLS.
+> **Status: planned, not implemented yet.** Egide does not terminate TLS itself; the container listens on plain HTTP. Put a reverse proxy (Traefik, Caddy, nginx) in front of the container and terminate TLS there. Let's Encrypt certificates work the same way, through the reverse proxy's own ACME support.
 
 ## Health Check
 
@@ -144,12 +107,12 @@ docker logs egide
 docker logs -f egide  # Follow
 ```
 
-### JSON Logging
+### Log Filtering
 
 ```bash
 docker run -d \
   --name egide \
-  -e EGIDE_LOG_FORMAT=json \
+  -e RUST_LOG=info,egide=debug \
   nubster/egide:latest
 ```
 
@@ -168,22 +131,17 @@ docker run -d \
 
 ### SQLite Backup
 
+The data directory holds one SQLite file per internal engine (for example `system.db`, `transit.db`, and one file per secrets tenant). Back up the whole directory:
+
 ```bash
 # Stop container (recommended)
 docker stop egide
 
-# Copy database
-docker cp egide:/var/lib/egide/egide.db ./backup/
+# Copy the data directory
+docker cp egide:/var/lib/egide ./backup/
 
 # Restart
 docker start egide
-```
-
-### Online Backup (WAL mode)
-
-```bash
-docker exec egide egide operator backup --output /var/lib/egide/backup.enc
-docker cp egide:/var/lib/egide/backup.enc ./backup/
 ```
 
 ## Upgrade

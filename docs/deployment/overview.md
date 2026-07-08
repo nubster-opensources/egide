@@ -40,18 +40,14 @@ services:
     ports:
       - "8200:8200"
     environment:
-      - EGIDE_STORAGE_TYPE=postgresql
-      - EGIDE_DB_HOST=postgres
-    depends_on:
-      - postgres
-
-  postgres:
-    image: postgres:16
+      - EGIDE_DATA_DIR=/var/lib/egide
     volumes:
-      - egide_data:/var/lib/postgresql/data
+      - egide_data:/var/lib/egide
 ```
 
 **Use case:** Small to medium production deployments.
+
+> PostgreSQL as a shared backend for multi-instance deployments is planned, not implemented yet; `egide-server` always uses its bundled SQLite backend today (see [Configuration](../getting-started/configuration.md#storage-backend)).
 
 ➡️ [Docker Compose Guide](./docker-compose.md)
 
@@ -104,8 +100,8 @@ sudo mv egide-server egide /usr/local/bin/
 
 | Backend | Use Case |
 |---------|----------|
-| SQLite | Development, standalone |
-| PostgreSQL | Production, clustering |
+| SQLite | Only backend `egide-server` runs today, single instance |
+| PostgreSQL | Planned: production, clustering (crate exists, not wired into the server yet) |
 
 ## Quick Comparison
 

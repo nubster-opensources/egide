@@ -4,6 +4,8 @@ This document describes Egide's storage layer architecture.
 
 ## Overview
 
+> **Storage backend selection is planned, not implemented yet.** `egide-server` always uses its bundled SQLite backend today; there is no flag, environment variable, or configuration file to select PostgreSQL at runtime, even though the `egide-storage-postgres` crate exists in the workspace and is unit-tested. See [Configuration](../getting-started/configuration.md#storage-backend). The rest of this page describes the trait-based abstraction and the target architecture.
+
 Egide uses a pluggable storage backend architecture:
 
 ```text
@@ -30,25 +32,22 @@ Egide uses a pluggable storage backend architecture:
 ```rust
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
-    /// Get a value by key
+    /// Get a value by key.
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError>;
 
-    /// Put a value
+    /// Put a value with a key.
     async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError>;
 
-    /// Delete a value
+    /// Delete a value by key.
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
 
-    /// List keys with prefix
+    /// List keys with a prefix.
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError>;
 
-    /// Check if key exists
-    async fn exists(&self, key: &str) -> Result<bool, StorageError>;
-
-    /// Transaction support
-    async fn transaction<F, T>(&self, f: F) -> Result<T, StorageError>
-    where
-        F: FnOnce(&mut dyn Transaction) -> Result<T, StorageError> + Send;
+    /// Check if a key exists (default implementation calls `get`).
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        Ok(self.get(key).await?.is_some())
+    }
 }
 ```
 
@@ -73,59 +72,31 @@ pub trait StorageBackend: Send + Sync {
 ### Schema
 
 ```sql
--- Core key-value storage
-CREATE TABLE egide_storage (
-    key TEXT PRIMARY KEY,
-    value BYTEA NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Each tenant gets its own Postgres schema; every query qualifies its table
+-- with that schema (see `egide-storage-postgres`).
+CREATE TABLE IF NOT EXISTS "<tenant_schema>".kv_store (
+    key        TEXT PRIMARY KEY,
+    value      BYTEA NOT NULL,
+    version    BIGINT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 
--- Index for prefix queries
-CREATE INDEX idx_storage_prefix ON egide_storage (key text_pattern_ops);
-
--- Audit log
-CREATE TABLE egide_audit_log (
-    id BIGSERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    tenant_id UUID,
+CREATE TABLE IF NOT EXISTS "<tenant_schema>".kv_history (
+    id        BIGSERIAL PRIMARY KEY,
+    key       TEXT NOT NULL,
+    value     BYTEA,
+    version   BIGINT NOT NULL,
     operation TEXT NOT NULL,
-    path TEXT NOT NULL,
-    source_ip INET,
-    user_id TEXT,
-    request_id UUID,
-    success BOOLEAN NOT NULL,
-    error_message TEXT,
-    metadata JSONB
+    actor     TEXT
 );
-
-CREATE INDEX idx_audit_timestamp ON egide_audit_log (timestamp);
-CREATE INDEX idx_audit_tenant ON egide_audit_log (tenant_id, timestamp);
 ```
+
+There is no audit log table; a tamper-evident audit log is planned for 0.2.0, not implemented yet.
 
 ### Configuration
 
-```toml
-[storage]
-type = "postgresql"
-
-[storage.postgresql]
-host = "localhost"
-port = 5432
-database = "egide"
-username = "egide"
-password_env = "EGIDE_DB_PASSWORD"
-
-# Connection pool
-pool_min = 5
-pool_max = 20
-connection_timeout = "10s"
-idle_timeout = "10m"
-
-# SSL
-ssl_mode = "require"  # disable, allow, prefer, require, verify-ca, verify-full
-ssl_root_cert = "/etc/egide/ca.crt"
-```
+> **Status: planned, not implemented yet.** No flag, environment variable, or configuration file exists today to point `egide-server` at a PostgreSQL instance. The parameters above (host, port, pool size, SSL mode) describe the target configuration surface once runtime storage selection ships.
 
 ### High Availability
 
@@ -176,34 +147,32 @@ ssl_root_cert = "/etc/egide/ca.crt"
 ### SQLite Schema
 
 ```sql
-CREATE TABLE egide_storage (
-    key TEXT PRIMARY KEY,
-    value BLOB NOT NULL,
+CREATE TABLE IF NOT EXISTS kv_store (
+    key        TEXT PRIMARY KEY,
+    value      BLOB NOT NULL,
+    version    INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
-CREATE INDEX idx_storage_prefix ON egide_storage (key);
+CREATE TABLE IF NOT EXISTS kv_history (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    key       TEXT NOT NULL,
+    value     BLOB,
+    version   INTEGER NOT NULL,
+    operation TEXT NOT NULL
+);
 ```
+
+Each tenant (secrets, `system` for seal state, `transit`) gets its own SQLite file under the data directory, rather than a shared file with per-tenant rows.
 
 ### SQLite Configuration
 
-```toml
-[storage]
-type = "sqlite"
-
-[storage.sqlite]
-path = "/var/lib/egide/egide.db"
-# path = ":memory:"  # For in-memory mode
-
-# Performance tuning
-journal_mode = "WAL"
-synchronous = "NORMAL"
-cache_size = 10000
-busy_timeout = "5s"
-```
+The only configuration surface is the data directory, set via `--data-dir` or `EGIDE_DATA_DIR` (default `./data`); see [Configuration](../getting-started/configuration.md). Egide opens one SQLite file per internal engine under that directory (for example `system.db` for seal state, `transit.db` for the Transit engine, and one file per secrets tenant). There is no per-file tuning surface (journal mode, cache size, busy timeout) exposed today.
 
 ### WAL Mode Benefits
+
+> Egide does not set a journal mode pragma today; each SQLite file uses SQLite's own default. The diagram below illustrates the general benefit WAL mode would bring if configured.
 
 ```text
 Without WAL:
@@ -257,90 +226,26 @@ All data is encrypted before storage:
 
 ## Backup and Recovery
 
+### SQLite (the backend used today)
+
+```bash
+# Stop the server first, then copy the whole data directory
+cp -r /var/lib/egide /backup/egide-$(date +%Y%m%d)
+```
+
+There is no `egide operator backup` or `egide operator restore` command; back up the data directory directly.
+
 ### PostgreSQL
 
-```bash
-# Backup
-pg_dump -Fc egide > egide_backup.dump
-
-# Restore
-pg_restore -d egide egide_backup.dump
-```
-
-### SQLite
-
-```bash
-# Backup (while running with WAL)
-sqlite3 /var/lib/egide/egide.db ".backup /backup/egide.db"
-
-# Or simple file copy (stop service first)
-cp /var/lib/egide/egide.db /backup/
-```
-
-### Egide CLI Backup
-
-```bash
-# Create encrypted backup
-egide operator backup --output /backup/egide-$(date +%Y%m%d).enc
-
-# Restore from backup
-egide operator restore --input /backup/egide-20240101.enc
-```
+> **Status: planned, not implemented yet.** Once the PostgreSQL backend is wired into `egide-server`, standard `pg_dump`/`pg_restore` would apply.
 
 ## Performance Tuning
 
-### PostgreSQL configuration
-
-```toml
-[storage.postgresql]
-# Connection pool
-pool_max = 50  # Based on: max_connections / egide_instances
-
-# Statement timeout
-statement_timeout = "30s"
-
-# Prepared statements
-prepare_threshold = 5
-```
-
-### SQLite configuration
-
-```toml
-[storage.sqlite]
-# WAL mode for concurrency
-journal_mode = "WAL"
-
-# Larger cache for frequently accessed data
-cache_size = 50000  # ~50MB
-
-# Batch writes
-synchronous = "NORMAL"  # vs FULL for durability
-```
+> **Status: planned, not implemented yet.** There is no connection-pool, statement-timeout, or SQLite-pragma tuning surface exposed today; both backends run with their library defaults.
 
 ## Monitoring
 
-### Metrics
-
-| Metric | Description |
-|--------|-------------|
-| `egide_storage_operations_total` | Total storage operations |
-| `egide_storage_operation_duration_seconds` | Operation latency |
-| `egide_storage_errors_total` | Storage errors |
-| `egide_storage_connections_active` | Active connections (PG) |
-
-### Health Check
-
-```http
-GET /v1/sys/health
-
-{
-  "storage": {
-    "type": "postgresql",
-    "status": "healthy",
-    "latency_ms": 1.2
-  }
-}
-```
+> **Status: planned, not implemented yet.** Egide does not expose storage metrics or a `/metrics` endpoint. `GET /v1/sys/health` returns `{"status", "version", "initialized", "sealed", "uptime_secs"}`; it has no `storage` sub-object.
 
 ## Future Backends
 
@@ -348,8 +253,8 @@ Planned storage backends:
 
 | Backend | Use Case | Status |
 |---------|----------|--------|
-| PostgreSQL | Production | ✅ Available |
-| SQLite | Development | ✅ Available |
+| SQLite | Development, the only backend the server runs today | ✅ Available |
+| PostgreSQL | Production, clustering | Crate implemented, not wired into `egide-server` yet |
 | S3 | Cloud-native | 🔜 Planned |
 | Consul | Service mesh | 🔜 Planned |
 | etcd | Kubernetes | 🔜 Planned |
