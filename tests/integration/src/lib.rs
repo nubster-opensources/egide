@@ -130,6 +130,10 @@ impl TestServer {
             .arg(data_dir.path())
             .arg("--bind")
             .arg(format!("127.0.0.1:{port}"))
+            // Dev mode now requires an explicit opt-in guard (see egide-seal
+            // `ensure_dev_mode_allowed`). Tests are not production, so they
+            // set it deliberately for the spawned server process.
+            .env("EGIDE_UNSAFE_DEV_MODE", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

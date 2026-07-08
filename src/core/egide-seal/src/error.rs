@@ -44,6 +44,10 @@ pub enum SealError {
     /// Crypto error.
     #[error("crypto error: {0}")]
     Crypto(String),
+
+    /// Dev mode was requested but the environment guard rejected it.
+    #[error("dev mode refused: {0}")]
+    DevModeForbidden(String),
 }
 
 impl From<egide_storage::StorageError> for SealError {
