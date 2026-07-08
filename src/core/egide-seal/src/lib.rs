@@ -34,6 +34,18 @@ type HmacSha256 = Hmac<Sha256>;
 /// Domain separation tag for master key verification.
 const SEAL_VERIFY_TAG: &[u8] = b"egide-seal-verify-v1";
 
+/// Environment variable that must be set to `"1"` to explicitly allow dev
+/// mode. Dev mode stores the master key in cleartext, so activating it must
+/// never be a default or accidental outcome.
+const DEV_MODE_GUARD_ENV: &str = "EGIDE_UNSAFE_DEV_MODE";
+
+/// Environment variable that, when set to `"production"` (case-insensitive),
+/// forbids dev mode regardless of the explicit guard above.
+const PRODUCTION_ENV_MARKER: &str = "EGIDE_ENV";
+
+/// Value of [`PRODUCTION_ENV_MARKER`] that forbids dev mode.
+const PRODUCTION_ENV_VALUE: &str = "production";
+
 use egide_crypto::MasterKey;
 use egide_storage::StorageBackend;
 use egide_storage_sqlite::SqliteBackend;
@@ -188,6 +200,16 @@ impl SealManager {
 
             // Check for dev mode
             if let Some(key_bytes) = self.storage.get(keys::DEV_MODE_KEY).await? {
+                // The data directory was previously initialized in dev mode.
+                // Auto-unsealing must be refused just like the initial
+                // activation: a dev-mode data directory copied into a
+                // production environment must not silently expose the
+                // cleartext master key on restart.
+                ensure_dev_mode_allowed(
+                    explicit_dev_mode_guard_is_set(),
+                    production_marker_is_present(),
+                )?;
+
                 warn!("⚠️  DEV MODE DETECTED - AUTO-UNSEALING - NOT FOR PRODUCTION ⚠️");
                 self.master_key = Some(
                     MasterKey::from_bytes(&key_bytes)
@@ -389,8 +411,26 @@ impl SealManager {
     }
 
     /// Enables dev mode (auto-unseal).
-    /// WARNING: Never use in production!
+    ///
+    /// WARNING: Never use in production! Dev mode stores the master key in
+    /// cleartext. Activation is refused unless the `EGIDE_UNSAFE_DEV_MODE`
+    /// environment variable is set to `"1"` and no release/production
+    /// marker is present. Dev mode is refused by default.
     pub async fn enable_dev_mode(&mut self) -> Result<(), SealError> {
+        ensure_dev_mode_allowed(
+            explicit_dev_mode_guard_is_set(),
+            production_marker_is_present(),
+        )?;
+
+        self.enable_dev_mode_unchecked().await
+    }
+
+    /// Enables dev mode without checking the environment guard.
+    ///
+    /// Only reachable after [`SealManager::enable_dev_mode`] already
+    /// checked the guard, or from tests that need dev mode as a fixture
+    /// without depending on process environment state.
+    async fn enable_dev_mode_unchecked(&mut self) -> Result<(), SealError> {
         if self.status != SealStatus::Uninitialized {
             return Err(SealError::AlreadyInitialized);
         }
@@ -569,6 +609,49 @@ fn hex_digit_value(byte: u8) -> Result<u8, String> {
     Ok(value)
 }
 
+/// Returns true when the operator explicitly opted into dev mode for this
+/// process via [`DEV_MODE_GUARD_ENV`].
+fn explicit_dev_mode_guard_is_set() -> bool {
+    std::env::var(DEV_MODE_GUARD_ENV).is_ok_and(|value| value == "1")
+}
+
+/// Returns true when dev mode must be refused because the process runs in
+/// a production configuration.
+///
+/// Release builds categorically refuse dev mode: `cfg!(not(debug_assertions))`
+/// makes the marker unconditionally present in any optimized build, and no
+/// environment variable can override it. Debug builds additionally treat an
+/// explicit `EGIDE_ENV=production` marker as production.
+fn production_marker_is_present() -> bool {
+    cfg!(not(debug_assertions))
+        || std::env::var(PRODUCTION_ENV_MARKER)
+            .is_ok_and(|value| value.eq_ignore_ascii_case(PRODUCTION_ENV_VALUE))
+}
+
+/// Decides whether dev mode may be activated, given the resolved guard
+/// state.
+///
+/// Kept separate from environment access so the decision logic can be
+/// exercised directly in tests without mutating process environment
+/// variables, which requires `unsafe` code since Rust 1.82 and this crate
+/// forbids unsafe code entirely.
+fn ensure_dev_mode_allowed(
+    explicit_guard_present: bool,
+    production_marker_present: bool,
+) -> Result<(), SealError> {
+    if production_marker_present {
+        return Err(SealError::DevModeForbidden(
+            "a release or production build marker is present".into(),
+        ));
+    }
+    if !explicit_guard_present {
+        return Err(SealError::DevModeForbidden(format!(
+            "set {DEV_MODE_GUARD_ENV}=1 to explicitly opt into dev mode"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
@@ -688,10 +771,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_enable_dev_mode_refuses_without_explicit_guard_by_default() {
+        let (_tmp, mut manager) = setup().await;
+
+        let result = manager.enable_dev_mode().await;
+
+        assert!(
+            result.is_err(),
+            "dev mode must not activate without an explicit environment guard"
+        );
+    }
+
+    #[tokio::test]
     async fn test_dev_mode() {
         let (_tmp, mut manager) = setup().await;
 
-        manager.enable_dev_mode().await.unwrap();
+        // Bypasses the environment guard: this test covers dev mode's
+        // effects (status, master key), not the guard itself, which has
+        // its own dedicated tests below.
+        manager.enable_dev_mode_unchecked().await.unwrap();
 
         assert_eq!(manager.status(), SealStatus::Unsealed);
         assert!(manager.is_dev_mode());
@@ -699,21 +797,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dev_mode_auto_unseal_on_restart() {
+    async fn test_dev_mode_auto_unseal_on_restart_requires_guard() {
         let tmp = TempDir::new().unwrap();
 
-        // First instance - enable dev mode
+        // First instance - enable dev mode via the test-only bypass.
         {
             let mut manager = SealManager::new(tmp.path()).await.unwrap();
-            manager.enable_dev_mode().await.unwrap();
+            manager.enable_dev_mode_unchecked().await.unwrap();
         }
 
-        // Second instance - should auto-unseal
+        // Second instance - restart must refuse to auto-unseal without the
+        // explicit environment guard, even though the data directory was
+        // previously initialized in dev mode.
         {
-            let manager = SealManager::new(tmp.path()).await.unwrap();
-            assert_eq!(manager.status(), SealStatus::Unsealed);
-            assert!(manager.is_dev_mode());
+            let result = SealManager::new(tmp.path()).await;
+            assert!(matches!(result, Err(SealError::DevModeForbidden(_))));
         }
+    }
+
+    #[test]
+    fn test_dev_mode_guard_requires_explicit_marker() {
+        let result = ensure_dev_mode_allowed(false, false);
+        assert!(matches!(result, Err(SealError::DevModeForbidden(_))));
+    }
+
+    #[test]
+    fn test_dev_mode_guard_refuses_in_production_configuration() {
+        let result = ensure_dev_mode_allowed(true, true);
+        assert!(
+            matches!(result, Err(SealError::DevModeForbidden(_))),
+            "the production marker must forbid dev mode even with the explicit guard set"
+        );
+    }
+
+    #[test]
+    fn test_dev_mode_guard_refuses_production_without_explicit_marker() {
+        let result = ensure_dev_mode_allowed(false, true);
+        assert!(matches!(result, Err(SealError::DevModeForbidden(_))));
+    }
+
+    #[test]
+    fn test_dev_mode_guard_allows_explicit_marker_outside_production() {
+        let result = ensure_dev_mode_allowed(true, false);
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
