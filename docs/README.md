@@ -1,15 +1,17 @@
 # Egide Documentation
 
-Welcome to the official documentation for **Egide**, a self-hosted secrets management, key management and PKI server.
+Welcome to the official documentation for **Egide**, a self-hosted secrets management server. Key management (KMS) and an internal certificate authority (PKI) are on the roadmap.
 
 ## What is Egide?
 
-Egide (from Greek *aegis*, the shield of Athena) is a unified server for managing secrets, cryptographic keys and certificates. Built with security and data ownership in mind, Egide covers four engines:
+Egide (from Greek *aegis*, the shield of Athena) is a unified server for managing secrets, cryptographic keys and certificates. Built with security and data ownership in mind, Egide is designed around four engines. Two are implemented today, two are planned:
 
-- **Secrets Engine**: secure storage for sensitive data with versioning and rotation
-- **KMS Engine**: cryptographic key management with encrypt and decrypt operations
-- **PKI Engine**: internal certificate authority for TLS and mTLS certificates
-- **Transit Engine**: encryption as a service without exposing keys
+- **Secrets Engine** (implemented): secure storage for sensitive data with versioning and rotation
+- **Transit Engine** (implemented): encryption as a service without exposing keys
+- **KMS Engine** (planned 0.3.0): cryptographic key management with sign and verify operations
+- **PKI Engine** (planned 0.4.0): internal certificate authority for TLS and mTLS certificates
+
+See the [Roadmap](../ROADMAP.md) for the release plan.
 
 ## Documentation Structure
 
@@ -23,9 +25,9 @@ Egide (from Greek *aegis*, the shield of Athena) is a unified server for managin
 
 - [Architecture](concepts/architecture.md): how Egide is designed
 - [Secrets Engine](concepts/secrets-engine.md): key/value secrets storage
-- [KMS Engine](concepts/kms-engine.md): key management and cryptographic operations
-- [PKI Engine](concepts/pki-engine.md): certificate authority and certificate management
 - [Transit Engine](concepts/transit-engine.md): encryption as a service
+- [KMS Engine](concepts/kms-engine.md): key management and cryptographic operations (planned 0.3.0)
+- [PKI Engine](concepts/pki-engine.md): certificate authority and certificate management (planned 0.4.0)
 - [Authentication](concepts/authentication.md): authentication methods
 
 ### Guides
@@ -39,9 +41,9 @@ Egide (from Greek *aegis*, the shield of Athena) is a unified server for managin
 
 - [API Overview](api/overview.md): REST API conventions and authentication
 - [Secrets API](api/secrets.md): `/v1/secrets/*` endpoints
-- [KMS API](api/kms.md): `/v1/kms/*` endpoints
-- [PKI API](api/pki.md): `/v1/pki/*` endpoints
 - [Transit API](api/transit.md): `/v1/transit/*` endpoints
+- [KMS API](api/kms.md): `/v1/kms/*` endpoints (planned 0.3.0, not served yet)
+- [PKI API](api/pki.md): `/v1/pki/*` endpoints (planned 0.4.0, not served yet)
 - [System API](api/system.md): `/v1/sys/*` endpoints
 
 ### Security

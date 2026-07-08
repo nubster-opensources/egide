@@ -6,31 +6,36 @@
 [![Status](https://img.shields.io/badge/status-alpha-yellow)](#status)
 [![Made with Rust](https://img.shields.io/badge/made%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 
-> A self-hosted KMS and Secrets Manager in Rust: encrypted key/value store,
-> key management, Transit encryption as a service, and an internal certificate
-> authority, behind a single REST and gRPC API, sealed at rest with Shamir
-> secret sharing.
+> A self-hosted secrets manager in Rust: encrypted key/value store and Transit
+> encryption as a service behind a single REST and gRPC API, sealed at rest
+> with Shamir secret sharing. Key management (KMS) and an internal certificate
+> authority (PKI) are on the roadmap.
 
 Egide is sponsored by [Nubster](https://nubster.com).
 
 ## Status
 
-Alpha. The workspace is at `0.1.0` and the features below shipped in that release. See [ROADMAP.md](ROADMAP.md) for the detailed plan.
+Alpha. The workspace is at `0.1.0`. The table below distinguishes what is implemented today from what is planned. See [ROADMAP.md](ROADMAP.md) for the detailed plan.
 
-| Capability | Version |
+| Capability | Status |
 | --- | --- |
 | Crypto core (AES-256-GCM, HKDF, CSPRNG, zeroization) | 0.1.0 |
 | Encrypted SQLite storage at rest | 0.1.0 |
 | Secrets engine (versioned key/value, hierarchical paths, soft delete) | 0.1.0 |
-| KMS engine (named keys, rotation) and Transit (encrypt, decrypt, sign) | 0.1.0 |
-| PKI engine (internal root and intermediate CA, issuance, revocation) | 0.1.0 |
+| Transit engine (encrypt, decrypt, rewrap, datakey, key rotation) over the API | 0.1.0 |
 | Seal/unseal with Shamir secret sharing | 0.1.0 |
 | REST API and gRPC API | 0.1.0 |
-| Native service tokens and AppRole auth | 0.1.0 |
+| Native service tokens | 0.1.0 |
 | PostgreSQL backend | 0.1.0 |
-| CLI tool | 0.1.0 |
+| CLI tool (operator and secrets commands) | 0.1.0 |
+| AppRole auth | planned 0.2.0 |
 | Append-only HMAC-signed audit log | planned 0.2.0 |
+| KMS engine (named keys, sign, verify, asymmetric keys) | planned 0.3.0 |
+| Transit sign, verify, hash and HMAC endpoints | planned 0.3.0 |
+| PKI engine (internal root and intermediate CA, issuance, revocation) | planned 0.4.0 |
 | Observability and high availability | planned 1.0.0 |
+
+The `egide-kms` and `egide-pki` crates exist in the workspace as placeholders (error types only); their engines are not implemented yet.
 
 ## Quick start
 
@@ -55,9 +60,17 @@ egide secrets put myapp/database password=s3cr3t
 
 # Retrieve a secret
 egide secrets get myapp/database
+```
 
-# Encrypt data through the Transit engine
-echo "sensitive data" | egide transit encrypt my-key
+The CLI currently covers operator and secrets commands. The Transit engine is
+available through the REST and gRPC APIs:
+
+```bash
+# Encrypt data through the Transit engine (base64-encoded plaintext)
+curl -s -X POST http://localhost:8200/v1/transit/encrypt/my-key \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"plaintext": "'"$(echo -n "sensitive data" | base64)"'"}'
 ```
 
 > Dev mode auto-unseals and is for local development only. Never run dev mode in production. See the [production checklist](docs/deployment/production-checklist.md).
@@ -87,10 +100,10 @@ Service tokens can read and write secrets but cannot manage other tokens or perf
 
 ## Why Egide?
 
-- **One server, four engines.** Secrets, KMS, Transit and PKI share a single sealed store, one auth model and one audit trail instead of four disjoint tools.
-- **Keys never leave the server.** Applications call Transit to encrypt, decrypt and sign. The key material stays inside Egide, sealed at rest.
+- **One server, one sealed store.** Secrets and Transit share a single sealed store and one auth model today. KMS and PKI are planned on the same foundation, instead of four disjoint tools.
+- **Keys never leave the server.** Applications call Transit to encrypt and decrypt. The key material stays inside Egide, sealed at rest. Sign and verify operations are planned with the KMS engine.
 - **Sealed by default.** The master key is split with Shamir secret sharing. A fresh or restarted server is sealed and serves nothing until a quorum of operators unseals it.
-- **Self-hostable and auditable.** Run it on your own infrastructure and rely on an append-only, signed audit log.
+- **Self-hostable.** Run it on your own infrastructure. An append-only, signed audit log is planned for 0.2.0.
 - **No lock-in.** Plain REST and gRPC over TLS, hierarchical paths, YAML policies. Nothing proprietary to adopt on the client side.
 
 ## What Egide is not
@@ -106,9 +119,9 @@ Service tokens can read and write secrets but cannot manage other tokens or perf
 | `egide-crypto` | Cryptographic primitives: AES-256-GCM, HKDF-SHA256, OS CSPRNG, memory zeroization |
 | `egide-seal` | Master key protection, Shamir secret sharing, seal and unseal |
 | `egide-secrets` | Key/value secrets engine: versioning, hierarchical paths, soft delete |
-| `egide-kms` | Key management engine: named keys, rotation, encrypt, decrypt, sign |
+| `egide-kms` | Placeholder for the KMS engine (planned 0.3.0): named keys, sign, verify |
 | `egide-transit` | Transit engine: encryption as a service, rewrap, datakey generation |
-| `egide-pki` | PKI engine: internal certificate authority, issuance, renewal, revocation |
+| `egide-pki` | Placeholder for the PKI engine (planned 0.4.0): internal certificate authority |
 | `egide-storage` | Storage backend abstraction (async trait) |
 | `egide-storage-sqlite` | SQLite storage backend |
 | `egide-storage-postgres` | PostgreSQL storage backend |
