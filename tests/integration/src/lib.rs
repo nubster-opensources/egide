@@ -219,6 +219,7 @@ fn find_server_binary() -> Result<std::path::PathBuf> {
 }
 
 /// Find the CLI binary (`egide`) in the target directory.
+#[cfg(test)]
 fn find_cli_binary() -> Result<std::path::PathBuf> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
 
