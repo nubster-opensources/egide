@@ -138,6 +138,8 @@ All configuration options can be set via environment variables:
 
 Environment variables take precedence over the configuration file.
 
+> `EGIDE_DEV_MODE` (equivalently, the server's `--dev` flag) also requires an explicit `EGIDE_UNSAFE_DEV_MODE=1` opt-in to activate, and release builds, including the published Docker image, refuse dev mode categorically regardless of either variable. See [Installation](installation.md) and the [production checklist](../deployment/production-checklist.md).
+
 ## TLS Configuration
 
 For production, always enable TLS:

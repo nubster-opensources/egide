@@ -4,33 +4,7 @@ Get Egide up and running in 5 minutes.
 
 ## 1. Start the Server
 
-### Development Mode
-
-For testing and development, start Egide in dev mode:
-
-```bash
-docker run -d \
-  --name egide \
-  -p 8200:8200 \
-  -e EGIDE_DEV_MODE=true \
-  nubster/egide:latest
-```
-
-In dev mode, Egide:
-
-- Auto-unseals on startup
-- Uses in-memory storage
-- Prints the root token to logs
-
-Get the root token:
-
-```bash
-docker logs egide 2>&1 | grep "Root token"
-```
-
-### Production Mode
-
-For production, start without dev mode:
+Start Egide with a persistent volume. The published image is a release build, so it always starts sealed: dev mode is refused by design and cannot be enabled on it.
 
 ```bash
 docker run -d \
@@ -39,6 +13,8 @@ docker run -d \
   -v egide-data:/var/lib/egide \
   nubster/egide:latest
 ```
+
+> Dev mode is a development convenience for contributors running a debug build locally, not something available on this image. It stores the master key in cleartext and needs an explicit `EGIDE_UNSAFE_DEV_MODE=1` opt-in even then: `EGIDE_UNSAFE_DEV_MODE=1 cargo run -p egide-server -- --dev`. See [Installation](installation.md#build-from-source) for building from source.
 
 ## 2. Initialize Egide
 

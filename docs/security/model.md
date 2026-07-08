@@ -287,6 +287,8 @@ On suspected compromise:
 - Ignore audit logs
 - Skip key rotation
 
+Release builds, including the published Docker image, refuse dev mode by design: there is no way to run dev mode in production, even by mistake. See the [production checklist](../deployment/production-checklist.md).
+
 ## Next Steps
 
 - [Compliance](compliance.md): Regulatory compliance

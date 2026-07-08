@@ -21,17 +21,7 @@ docker run -d \
   nubster/egide:latest
 ```
 
-For development with auto-unseal:
-
-```bash
-docker run -d \
-  --name egide-dev \
-  -p 8200:8200 \
-  -e EGIDE_DEV_MODE=true \
-  nubster/egide:latest
-```
-
-> **Warning**: Never use `EGIDE_DEV_MODE=true` in production. It disables security features.
+The published image is a release build. It always starts sealed and refuses dev mode by design: initialize and unseal it with the CLI or the REST API (see the [Quick Start](quick-start.md)).
 
 ## Docker Compose
 
@@ -105,6 +95,16 @@ Binaries will be available in `target/release/`:
 sudo cp target/release/egide-server /usr/local/bin/
 sudo cp target/release/egide /usr/local/bin/
 ```
+
+### Development Mode
+
+For local development against a debug build (not the published Docker image, which is always a release build), dev mode auto-unseals with the master key stored in cleartext. It requires an explicit opt-in and is refused entirely in release builds:
+
+```bash
+EGIDE_UNSAFE_DEV_MODE=1 cargo run -p egide-server -- --dev
+```
+
+Never set `EGIDE_UNSAFE_DEV_MODE` outside local development.
 
 ## Next Steps
 

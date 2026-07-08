@@ -44,9 +44,11 @@ The `egide-kms` and `egide-pki` crates exist in the workspace as placeholders (e
 ```bash
 docker run -d --name egide \
   -p 8200:8200 \
-  -e EGIDE_DEV_MODE=true \
+  -v egide-data:/var/lib/egide \
   nubster/egide:latest
 ```
+
+Egide starts sealed. Initialize and unseal it with the CLI below, or directly against the REST API (`POST /v1/sys/init`, `POST /v1/sys/unseal`).
 
 ### Using the CLI
 
@@ -73,7 +75,7 @@ curl -s -X POST http://localhost:8200/v1/transit/encrypt/my-key \
   -d '{"plaintext": "'"$(echo -n "sensitive data" | base64)"'"}'
 ```
 
-> Dev mode auto-unseals and is for local development only. Never run dev mode in production. See the [production checklist](docs/deployment/production-checklist.md).
+> Dev mode is a development convenience for contributors running a debug build locally (`EGIDE_UNSAFE_DEV_MODE=1 cargo run -p egide-server -- --dev`). It stores the master key in cleartext, requires that explicit opt-in even in a debug build, and is refused categorically by release builds, including this published Docker image. Never run dev mode in production. See the [production checklist](docs/deployment/production-checklist.md).
 
 ### Service token provisioning
 
