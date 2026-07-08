@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded sqlx to 0.9; dynamic SQL statements are explicitly marked with `AssertSqlSafe` after audit
 - Raised the MSRV from Rust 1.88 to Rust 1.94, required by sqlx 0.9
 
+### Fixed
+- CLI: the CLI now authenticates with `Authorization: Bearer` as documented;
+  previously it sent a header the server ignored, so authenticated CLI
+  commands failed with 401.
+
 ## [0.1.0] - 2026-06-15
 
 First public release. Egide provides a self-hosted Secrets Manager and Transit

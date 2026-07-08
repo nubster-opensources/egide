@@ -271,7 +271,7 @@ impl EgideClient {
         let mut req = self.client.post(self.url("/v1/sys/seal"));
 
         if let Some(token) = &self.token {
-            req = req.header("X-Egide-Token", token);
+            req = req.bearer_auth(token);
         }
 
         let resp = req.send().await.context("Failed to connect to server")?;
@@ -295,7 +295,7 @@ impl EgideClient {
         let resp = self
             .client
             .get(self.url(&format!("/v1/secrets/{path}")))
-            .header("X-Egide-Token", token)
+            .bearer_auth(token)
             .send()
             .await
             .context("Failed to connect to server")?;
@@ -325,7 +325,7 @@ impl EgideClient {
         let resp = self
             .client
             .put(self.url(&format!("/v1/secrets/{path}")))
-            .header("X-Egide-Token", token)
+            .bearer_auth(token)
             .json(&req)
             .send()
             .await
@@ -350,7 +350,7 @@ impl EgideClient {
         let resp = self
             .client
             .delete(self.url(&format!("/v1/secrets/{path}")))
-            .header("X-Egide-Token", token)
+            .bearer_auth(token)
             .send()
             .await
             .context("Failed to connect to server")?;
@@ -374,7 +374,7 @@ impl EgideClient {
         let resp = self
             .client
             .get(self.url("/v1/secrets"))
-            .header("X-Egide-Token", token)
+            .bearer_auth(token)
             .send()
             .await
             .context("Failed to connect to server")?;

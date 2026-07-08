@@ -52,8 +52,8 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Build server (for integration tests)
-        run: cargo build -p egide-server
+      - name: Build server and CLI (for integration tests)
+        run: cargo build -p egide-server -p egide-cli
 
       - name: Test
         run: cargo test --all-features
