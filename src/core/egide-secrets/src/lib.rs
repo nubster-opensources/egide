@@ -1010,4 +1010,122 @@ mod tests {
             assert_eq!(secret.data.get("username").unwrap(), "admin");
         }
     }
+
+    #[tokio::test]
+    async fn test_swapped_version_blobs_fail_decryption() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/spliced", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        let mut data2 = test_data();
+        data2.insert("password".to_string(), "rotated".to_string());
+        engine
+            .put("app/spliced", data2, PutOptions::default())
+            .await
+            .unwrap();
+
+        let (data_v1, nonce_v1) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/spliced"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (data_v2, nonce_v2) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 2",
+                &["app/spliced"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Swap the encrypted blobs underneath the engine, simulating an
+        // attacker with direct storage access.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 1",
+                &[&data_v2, &nonce_v2, "app/spliced"],
+            )
+            .await
+            .unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 2",
+                &[&data_v1, &nonce_v1, "app/spliced"],
+            )
+            .await
+            .unwrap();
+
+        let result_v1 = engine.get_version("app/spliced", 1).await;
+        assert!(matches!(result_v1, Err(SecretsError::Crypto(_))));
+        let result_v2 = engine.get_version("app/spliced", 2).await;
+        assert!(matches!(result_v2, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_replayed_blob_under_other_version_fails() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/replayed", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        let mut data2 = test_data();
+        data2.insert("password".to_string(), "rotated".to_string());
+        engine
+            .put("app/replayed", data2, PutOptions::default())
+            .await
+            .unwrap();
+
+        let (data_v1, nonce_v1) = engine
+            .storage
+            .query_one::<(String, String)>(
+                "SELECT data, nonce FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/replayed"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Replay version 1's blob in version 2's row: a rollback forged at
+        // the storage layer must not authenticate.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET data = ?, nonce = ? WHERE path = ? AND version = 2",
+                &[&data_v1, &nonce_v1, "app/replayed"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_version("app/replayed", 2).await;
+        assert!(matches!(result, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_many_rotations_all_versions_decrypt() {
+        let (_tmp, engine) = setup().await;
+
+        for i in 1..=50u32 {
+            let mut data = HashMap::new();
+            data.insert("counter".to_string(), i.to_string());
+            engine
+                .put("app/rotated", data, PutOptions::default())
+                .await
+                .unwrap();
+        }
+
+        for i in 1..=50u32 {
+            let secret = engine.get_version("app/rotated", i).await.unwrap();
+            assert_eq!(secret.data.get("counter").unwrap(), &i.to_string());
+        }
+    }
 }
