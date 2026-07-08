@@ -218,6 +218,29 @@ fn find_server_binary() -> Result<std::path::PathBuf> {
     )
 }
 
+/// Find the CLI binary (`egide`) in the target directory.
+fn find_cli_binary() -> Result<std::path::PathBuf> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+
+    // Try debug build first, then release
+    let candidates = [
+        std::path::Path::new(&manifest_dir).join("../../target/debug/egide"),
+        std::path::Path::new(&manifest_dir).join("../../target/debug/egide.exe"),
+        std::path::Path::new(&manifest_dir).join("../../target/release/egide"),
+        std::path::Path::new(&manifest_dir).join("../../target/release/egide.exe"),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Ok(candidate.canonicalize()?);
+        }
+    }
+
+    bail!(
+        "Could not find egide binary. Run 'cargo build -p egide-cli' first. Searched in: {candidates:?}"
+    )
+}
+
 // ============================================================================
 // Test Client
 // ============================================================================
@@ -716,4 +739,105 @@ mod tests {
     // The RootToken backend only issues root contexts, so there is no
     // straightforward way to produce an authenticated non-root token in tests.
     // Coverage: 401 (missing) + 401 (invalid) + 200 (root) are the hard criteria.
+
+    // -------------------------------------------------------------------------
+    // CLI authentication tests (issue #63)
+    // -------------------------------------------------------------------------
+
+    /// The `egide secrets put` / `egide secrets get` commands must authenticate
+    /// against the server using the `Authorization: Bearer <token>` header.
+    ///
+    /// Before the fix, the CLI sends `X-Egide-Token`, which the server never
+    /// reads, so both commands fail with a 401 from the server and a non-zero
+    /// CLI exit code. This test drives the real `egide` binary as a subprocess
+    /// against a real `egide-server` instance, so it proves the wire protocol
+    /// end to end rather than only the internal header-building code.
+    #[tokio::test]
+    async fn cli_secrets_roundtrip_authenticates_with_bearer() {
+        let port = next_port();
+        let data_dir = TempDir::new().unwrap();
+        let server_binary = find_server_binary().unwrap();
+        let cli_binary = find_cli_binary().unwrap();
+
+        let mut process = Command::new(&server_binary)
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{port}"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let base_url = format!("http://127.0.0.1:{port}");
+        let client = EgideClient::new(&base_url);
+
+        // Wait for the server to be healthy before driving it further.
+        let mut ready = false;
+        for _ in 0..50 {
+            if client.health().await.is_ok() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(ready, "server failed to become healthy within 5 seconds");
+
+        // Initialize and unseal through the REST helpers to obtain a root token.
+        let init = client.init(3, 2).await.unwrap();
+        client.unseal(&init.keys[0]).await.unwrap();
+        client.unseal(&init.keys[1]).await.unwrap();
+
+        let addr = base_url.clone();
+        let token = init.root_token.clone();
+
+        // `egide secrets put <path> <key>=<value>` should succeed and
+        // authenticate with the root token via EGIDE_TOKEN.
+        let put_output = Command::new(&cli_binary)
+            .arg("secrets")
+            .arg("put")
+            .arg("cli-roundtrip/config")
+            .arg("greeting=hello-from-cli")
+            .env("EGIDE_ADDR", &addr)
+            .env("EGIDE_TOKEN", &token)
+            .output()
+            .unwrap();
+
+        assert!(
+            put_output.status.success(),
+            "egide secrets put failed (status {:?}).\nstdout:\n{}\nstderr:\n{}",
+            put_output.status.code(),
+            String::from_utf8_lossy(&put_output.stdout),
+            String::from_utf8_lossy(&put_output.stderr)
+        );
+
+        // `egide secrets get <path>` should succeed and return the stored value.
+        let get_output = Command::new(&cli_binary)
+            .arg("secrets")
+            .arg("get")
+            .arg("cli-roundtrip/config")
+            .env("EGIDE_ADDR", &addr)
+            .env("EGIDE_TOKEN", &token)
+            .output()
+            .unwrap();
+
+        assert!(
+            get_output.status.success(),
+            "egide secrets get failed (status {:?}).\nstdout:\n{}\nstderr:\n{}",
+            get_output.status.code(),
+            String::from_utf8_lossy(&get_output.stdout),
+            String::from_utf8_lossy(&get_output.stderr)
+        );
+
+        let get_stdout = String::from_utf8_lossy(&get_output.stdout);
+        assert!(
+            get_stdout.contains("hello-from-cli"),
+            "expected the stored value in `egide secrets get` output, got:\nstdout:\n{}\nstderr:\n{}",
+            get_stdout,
+            String::from_utf8_lossy(&get_output.stderr)
+        );
+
+        let _ = process.kill();
+        let _ = process.wait();
+    }
 }
