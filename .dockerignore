@@ -29,11 +29,13 @@ deploy/
 Makefile
 rust-toolchain.toml
 
-# Tests
+# Tests (kept out of the runtime image, but tests/integration is a workspace
+# member whose manifest must stay in the build context for cargo to parse it)
 tests/
 examples/
 **/tests/
 **/*_test.rs
+!tests/integration/
 
 # Misc
 *.log
