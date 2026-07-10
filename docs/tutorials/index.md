@@ -9,4 +9,4 @@ confidence.
 - [Quick start](../getting-started/quick-start.md): initialize, unseal, and store your first secret.
 - [Docker setup](../guides/docker.md): run egide locally with Docker Compose.
 
-More tutorials are planned. See [ROADMAP.md](../../ROADMAP.md) for upcoming topics.
+More tutorials are planned. See the [roadmap](../explanation/roadmap.md) for upcoming topics.

@@ -46,7 +46,7 @@ equivalent switch today.
 
 > **Status: planned, not implemented yet.** Wiring the PostgreSQL backend into
 > `egide-server` startup, with an explicit storage-selection flag, is on the
-> roadmap; no target version is committed. See [ROADMAP.md](../../ROADMAP.md).
+> roadmap; no target version is committed. See the [roadmap](../explanation/roadmap.md).
 
 ## TLS
 
