@@ -1081,6 +1081,21 @@ mod tests {
         assert!(debug_str.contains("REDACTED"));
     }
 
+    #[test]
+    fn test_datakey_zeroize_wipes_plaintext_and_skips_ciphertext() {
+        let mut datakey = DataKey {
+            plaintext: vec![0xAB; 32],
+            ciphertext: "egide:v1:dummy-ciphertext".to_string(),
+        };
+
+        datakey.zeroize();
+
+        // The plaintext key is wiped, while the non-sensitive ciphertext is
+        // skipped and left intact, confirming the field-level zeroize wiring.
+        assert!(datakey.plaintext.is_empty());
+        assert_eq!(datakey.ciphertext, "egide:v1:dummy-ciphertext");
+    }
+
     #[tokio::test]
     async fn test_encryption_disabled() {
         let (_tmp, engine) = setup().await;
