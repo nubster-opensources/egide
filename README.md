@@ -15,7 +15,7 @@ Egide is sponsored by [Nubster](https://nubster.com).
 
 ## Status
 
-Alpha. The workspace is at `0.1.0`. The table below distinguishes what is implemented today from what is planned. See [ROADMAP.md](ROADMAP.md) for the detailed plan.
+Alpha. The workspace is at `0.1.0`. The table below distinguishes what is implemented today from what is planned. See the [roadmap](docs/explanation/roadmap.md) for the detailed plan.
 
 | Capability | Status |
 | --- | --- |

@@ -10,4 +10,4 @@ specific goal. They assume you already have a working egide instance.
 - [Backup and recovery](../guides/backup.md): back up the vault and restore from a snapshot.
 - [Docker Compose](../guides/docker.md): manage egide with Docker Compose.
 
-More guides are planned. See [ROADMAP.md](../../ROADMAP.md) for upcoming topics.
+More guides are planned. See the [roadmap](../explanation/roadmap.md) for upcoming topics.

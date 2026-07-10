@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First public release. Egide provides a self-hosted Secrets Manager and Transit
 encryption as a service, with a REST and gRPC server, native service tokens,
 Shamir-based seal/unseal, and a SQLite storage backend. The KMS and PKI engines
-are planned (see ROADMAP.md); their crates ship as placeholders with error
+are planned (see docs/explanation/roadmap.md); their crates ship as placeholders with error
 types only.
 
 ### Added

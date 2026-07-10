@@ -70,7 +70,7 @@ Service tokens can read and write secrets and use existing Transit keys, but can
 
 ## AppRole, OIDC and mTLS
 
-> **Status: planned, not implemented yet.** AppRole is tracked for 0.2.0 (see [ROADMAP.md](../../ROADMAP.md)); OIDC and mTLS have no committed target version. Today, root token and service tokens (above) are the only authentication methods.
+> **Status: planned, not implemented yet.** AppRole is tracked for 0.2.0 (see the [roadmap](../explanation/roadmap.md)); OIDC and mTLS have no committed target version. Today, root token and service tokens (above) are the only authentication methods.
 
 ## Policies
 

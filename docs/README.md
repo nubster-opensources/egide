@@ -11,7 +11,7 @@ Egide (from Greek *aegis*, the shield of Athena) is a unified server for managin
 - **KMS Engine** (planned 0.3.0): cryptographic key management with sign and verify operations
 - **PKI Engine** (planned 0.4.0): internal certificate authority for TLS and mTLS certificates
 
-See the [Roadmap](../ROADMAP.md) for the release plan.
+See the [Roadmap](explanation/roadmap.md) for the release plan.
 
 ## Documentation Structure
 
@@ -60,7 +60,7 @@ See the [Roadmap](../ROADMAP.md) for the release plan.
 
 - [GitHub Repository](https://github.com/nubster-opensources/egide)
 - [Report an Issue](https://github.com/nubster-opensources/egide/issues)
-- [Roadmap](../ROADMAP.md)
+- [Roadmap](explanation/roadmap.md)
 
 ## License
 
