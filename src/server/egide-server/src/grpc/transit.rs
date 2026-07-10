@@ -168,9 +168,10 @@ impl TransitService for TransitGrpc {
         authenticate(&request, &self.state).await?;
         let req = request.into_inner();
         let dk = self.state.datakey(&req.name).await.map_err(to_status)?;
+        let (plaintext, ciphertext) = dk.into_parts();
         Ok(Response::new(DatakeyResponse {
-            plaintext: dk.plaintext,
-            ciphertext: dk.ciphertext,
+            plaintext,
+            ciphertext,
         }))
     }
 
