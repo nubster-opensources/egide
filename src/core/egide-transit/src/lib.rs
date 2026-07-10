@@ -27,6 +27,7 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use egide_crypto::{aead, kdf, random, MasterKey};
 use egide_storage_sqlite::SqliteBackend;
@@ -177,12 +178,39 @@ pub struct KeyVersionInfo {
 }
 
 /// Result of a datakey generation.
-#[derive(Debug, Clone)]
+///
+/// `plaintext` holds the raw data encryption key and is zeroized on drop.
+/// Its `Debug` output never prints the key bytes.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct DataKey {
     /// Plaintext key (32 bytes for use by the client).
     pub plaintext: Vec<u8>,
-    /// Wrapped (encrypted) key for storage.
+    /// Wrapped (encrypted) key for storage. Already ciphertext, not sensitive.
+    #[zeroize(skip)]
     pub ciphertext: String,
+}
+
+impl std::fmt::Debug for DataKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataKey")
+            .field("plaintext", &"[REDACTED]")
+            .field("ciphertext", &self.ciphertext)
+            .finish()
+    }
+}
+
+impl DataKey {
+    /// Consumes the data key and returns its raw `(plaintext, ciphertext)` parts.
+    ///
+    /// `DataKey` zeroizes `plaintext` on drop, so its fields cannot be moved
+    /// out directly. Use this to hand the plaintext off to a caller (e.g. a
+    /// response encoder) that takes ownership of it.
+    #[must_use]
+    pub fn into_parts(mut self) -> (Vec<u8>, String) {
+        let plaintext = std::mem::take(&mut self.plaintext);
+        let ciphertext = std::mem::take(&mut self.ciphertext);
+        (plaintext, ciphertext)
+    }
 }
 
 // ============================================================================
@@ -1036,6 +1064,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decrypted, datakey.plaintext);
+    }
+
+    #[test]
+    fn test_datakey_debug_redacts_plaintext() {
+        let datakey = DataKey {
+            plaintext: vec![0xAB; 32],
+            ciphertext: "egide:v1:dummy-ciphertext".to_string(),
+        };
+
+        let debug_str = format!("{datakey:?}");
+
+        // The decimal representation of 0xAB (171) must never leak into the
+        // Debug output, whether as a Vec<u8> element list or otherwise.
+        assert!(!debug_str.contains("171"));
+        assert!(debug_str.contains("REDACTED"));
     }
 
     #[tokio::test]

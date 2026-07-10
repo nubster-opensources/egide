@@ -230,9 +230,10 @@ pub async fn datakey_handler(
     Path(name): Path<String>,
 ) -> Result<Json<DataKeyResponse>, Problem> {
     let datakey = state.datakey(&name).await.map_err(Problem::from)?;
+    let (plaintext, ciphertext) = datakey.into_parts();
     Ok(Json(DataKeyResponse {
-        plaintext: BASE64.encode(&datakey.plaintext),
-        ciphertext: datakey.ciphertext,
+        plaintext: BASE64.encode(plaintext),
+        ciphertext,
     }))
 }
 
