@@ -628,7 +628,7 @@ impl SecretsEngine {
     ///
     /// Returns the number of secrets purged.
     pub async fn purge_deleted(&self, older_than: Duration) -> Result<u32, SecretsError> {
-        let cutoff = Self::now() - older_than.as_secs();
+        let cutoff = Self::now().saturating_sub(older_than.as_secs());
 
         // Get paths to purge
         let paths = self
@@ -862,6 +862,51 @@ mod tests {
         engine.undelete("app/deleted").await.unwrap();
         let secret = engine.get_version("app/deleted", 1).await.unwrap();
         assert_eq!(secret.version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_purge_deleted_does_not_purge_when_older_than_exceeds_now() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/retained", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine.delete("app/retained").await.unwrap();
+
+        // A retention duration longer than the current Unix time must not
+        // underflow the cutoff computation, and must not purge anything.
+        let purged = engine
+            .purge_deleted(Duration::from_secs(u64::MAX))
+            .await
+            .unwrap();
+
+        assert_eq!(purged, 0);
+
+        // The secret must still be recoverable.
+        engine.undelete("app/retained").await.unwrap();
+        let secret = engine.get("app/retained").await.unwrap();
+        assert_eq!(secret.data.get("username").unwrap(), "admin");
+    }
+
+    #[tokio::test]
+    async fn test_purge_deleted_purges_old_soft_deleted_secrets() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("app/stale", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine.delete("app/stale").await.unwrap();
+
+        // Ensure deleted_at lands strictly before the purge cutoff.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let purged = engine.purge_deleted(Duration::from_secs(0)).await.unwrap();
+        assert_eq!(purged, 1);
+
+        let result = engine.get("app/stale").await;
+        assert!(matches!(result, Err(SecretsError::NotFound(_))));
     }
 
     #[tokio::test]
