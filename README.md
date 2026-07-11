@@ -7,9 +7,7 @@
 [![Made with Rust](https://img.shields.io/badge/made%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 
 > A self-hosted secrets manager in Rust: encrypted key/value store and Transit
-> encryption as a service behind a single REST and gRPC API, sealed at rest
-> with Shamir secret sharing. Key management (KMS) and an internal certificate
-> authority (PKI) are on the roadmap.
+> encryption service. KMS and PKI are planned, not yet implemented.
 
 Egide is sponsored by [Nubster](https://nubster.com).
 

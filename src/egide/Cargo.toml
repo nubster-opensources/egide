@@ -1,6 +1,6 @@
 [package]
 name = "egide"
-description = "Egide - self-hosted Secrets Manager and Transit encryption in Rust (umbrella crate; KMS and PKI planned)"
+description = "A self-hosted secrets manager in Rust: encrypted key/value store and Transit encryption service. KMS and PKI are planned, not yet implemented."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
