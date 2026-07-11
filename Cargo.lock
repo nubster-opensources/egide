@@ -808,8 +808,10 @@ dependencies = [
  "aes-gcm",
  "hex",
  "hkdf",
+ "hmac",
  "rand 0.10.2",
  "sha2 0.11.0",
+ "subtle",
  "thiserror",
  "zeroize",
 ]

@@ -34,6 +34,7 @@ pub mod aead;
 pub mod error;
 pub mod kdf;
 pub mod keys;
+pub mod mac;
 pub mod random;
 
 pub use error::CryptoError;
