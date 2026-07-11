@@ -201,7 +201,7 @@ async fn parity_decrypt_missing_key() {
     let ch = wait_for_grpc(addr).await;
     let mut transit = TransitServiceClient::new(ch);
 
-    // gRPC: NotFound (pinned — REST equivalent: 404 transit.rs::encrypt_unknown_key_is_404)
+    // gRPC: NotFound (pinned - REST equivalent: 404 transit.rs::encrypt_unknown_key_is_404)
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         transit.decrypt(with_token(
@@ -249,7 +249,7 @@ async fn parity_key_management_requires_root() {
     let ch = wait_for_grpc(addr).await;
     let mut transit = TransitServiceClient::new(ch);
 
-    // gRPC: PermissionDenied (pinned — REST: 403 transit.rs::service_token_cannot_create_key)
+    // gRPC: PermissionDenied (pinned - REST: 403 transit.rs::service_token_cannot_create_key)
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         transit.create_key(with_token(
@@ -295,7 +295,7 @@ async fn parity_operation_while_sealed() {
     let ch = wait_for_grpc(addr).await;
     let mut transit = TransitServiceClient::new(ch);
 
-    // gRPC: Unavailable (pinned — REST: 503 transit.rs::management_route_when_sealed_is_503)
+    // gRPC: Unavailable (pinned - REST: 503 transit.rs::management_route_when_sealed_is_503)
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         transit.list_keys(with_token(ListKeysRequest {}, &root)),
@@ -334,7 +334,7 @@ async fn parity_invalid_base64_argument() {
     let mut transit = TransitServiceClient::new(ch);
 
     // gRPC: send a ciphertext that is not in `vault:vN:...` format.
-    // (pinned — REST: 400 transit.rs::encrypt_invalid_base64_is_400)
+    // (pinned - REST: 400 transit.rs::encrypt_invalid_base64_is_400)
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         transit.decrypt(with_token(
@@ -354,7 +354,7 @@ async fn parity_invalid_base64_argument() {
         "gRPC: expected InvalidArgument"
     );
 
-    // REST: 400 — invalid base64 in encrypt payload.
+    // REST: 400 - invalid base64 in encrypt payload.
     let status = rest_status(
         router,
         "POST",
@@ -390,7 +390,7 @@ async fn parity_corrupt_ciphertext_is_invalid_argument() {
     let ch = wait_for_grpc(addr).await;
     let mut transit = TransitServiceClient::new(ch);
 
-    // gRPC: InvalidArgument — anti-oracle, no padding information leaked.
+    // gRPC: InvalidArgument - anti-oracle, no padding information leaked.
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         transit.decrypt(with_token(

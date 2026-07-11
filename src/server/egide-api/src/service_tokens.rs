@@ -90,7 +90,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Failing tests (step 1 — written before implementation)
+    // Failing tests (step 1: written before implementation)
     // -------------------------------------------------------------------------
 
     #[tokio::test]

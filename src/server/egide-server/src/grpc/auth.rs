@@ -45,7 +45,7 @@ mod tests {
     use tonic::Code;
 
     /// Builds a minimal `ServiceContext` with root-token + service-token auth.
-    /// Secrets and transit engines are left as `None` — not needed for auth tests.
+    /// Secrets and transit engines are left as `None`, not needed for auth tests.
     async fn auth_context() -> (tempfile::TempDir, Arc<ServiceContext>, String) {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let mut seal = SealManager::new(tmp.path()).await.expect("seal manager");
