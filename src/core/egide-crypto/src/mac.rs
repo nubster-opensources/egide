@@ -4,6 +4,10 @@
 //! a keyed HMAC-SHA256 tag over those bytes, with constant-time verification.
 //! Used to authenticate mutable storage rows (the secrets version pointer and
 //! the transit key policy row) and to build tamper-proof AEAD associated data.
+//!
+//! The field encoding is a fixed-width u32 big-endian TLV format; because MAC
+//! tags are persisted over it, changing the prefix width would silently break
+//! existing stored data.
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -28,7 +32,8 @@ pub const MAC_SIZE: usize = 32;
 /// Returns [`CryptoError::InvalidInput`] if any field is longer than `u32::MAX`
 /// bytes and therefore cannot be length-prefixed.
 pub fn encode_fields(fields: &[&[u8]]) -> Result<Vec<u8>, CryptoError> {
-    let mut out = Vec::new();
+    let capacity: usize = fields.iter().map(|field| field.len() + 4).sum();
+    let mut out = Vec::with_capacity(capacity);
     for field in fields {
         let length = u32::try_from(field.len()).map_err(|_| {
             CryptoError::InvalidInput("field too long for u32 length prefix".to_string())
@@ -58,15 +63,26 @@ pub fn compute_mac(key: &[u8], data: &[u8]) -> Result<[u8; MAC_SIZE], CryptoErro
 
 /// Verifies `tag` against a freshly computed HMAC-SHA256 of `data` under `key`.
 ///
-/// The comparison is constant-time. A tag of the wrong length compares unequal
-/// without leaking the mismatch position.
+/// The comparison is constant-time for equal-length tags. `subtle`'s slice
+/// `ct_eq` performs an early length check (returning not-equal when
+/// `tag.len() != MAC_SIZE`) before the constant-time byte compare. That leaks
+/// nothing secret: the tag length is attacker-supplied and therefore public,
+/// while the property that matters (never revealing where two equal-length
+/// tags differ) is preserved.
 ///
 /// # Errors
 ///
-/// Propagates any error from [`compute_mac`].
-pub fn verify_mac(key: &[u8], data: &[u8], tag: &[u8]) -> Result<bool, CryptoError> {
+/// Returns [`CryptoError::VerificationFailed`] if the tag does not match, and
+/// propagates any error from [`compute_mac`]. A mismatch is an error rather
+/// than an `Ok(false)` so a caller cannot silently accept a forged tag by
+/// discarding a boolean return.
+pub fn verify_mac(key: &[u8], data: &[u8], tag: &[u8]) -> Result<(), CryptoError> {
     let computed = compute_mac(key, data)?;
-    Ok(computed[..].ct_eq(tag).into())
+    if bool::from(computed[..].ct_eq(tag)) {
+        Ok(())
+    } else {
+        Err(CryptoError::VerificationFailed)
+    }
 }
 
 #[cfg(test)]
@@ -120,7 +136,7 @@ mod tests {
         let key = b"secret subkey material";
         let data = encode_fields(&[b"transit", b"policy", b"v1"]).unwrap();
         let tag = compute_mac(key, &data).unwrap();
-        assert!(verify_mac(key, &data, &tag).unwrap());
+        assert!(verify_mac(key, &data, &tag).is_ok());
     }
 
     #[test]
@@ -129,7 +145,10 @@ mod tests {
         let data = encode_fields(&[b"transit", b"policy", b"v1"]).unwrap();
         let mut tag = compute_mac(key, &data).unwrap();
         tag[0] ^= 0x01;
-        assert!(!verify_mac(key, &data, &tag).unwrap());
+        assert!(matches!(
+            verify_mac(key, &data, &tag),
+            Err(CryptoError::VerificationFailed)
+        ));
     }
 
     #[test]
@@ -137,13 +156,19 @@ mod tests {
         let key = b"secret subkey material";
         let data = encode_fields(&[b"x"]).unwrap();
         let short = [0u8; 8];
-        assert!(!verify_mac(key, &data, &short).unwrap());
+        assert!(matches!(
+            verify_mac(key, &data, &short),
+            Err(CryptoError::VerificationFailed)
+        ));
     }
 
     #[test]
     fn verify_mac_rejects_wrong_key() {
         let data = encode_fields(&[b"pointer"]).unwrap();
         let tag = compute_mac(b"key one", &data).unwrap();
-        assert!(!verify_mac(b"key two", &data, &tag).unwrap());
+        assert!(matches!(
+            verify_mac(b"key two", &data, &tag),
+            Err(CryptoError::VerificationFailed)
+        ));
     }
 }
