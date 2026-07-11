@@ -33,6 +33,7 @@
 pub mod aead;
 pub mod error;
 pub mod kdf;
+pub mod mac;
 pub mod keys;
 pub mod random;
 
