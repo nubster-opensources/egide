@@ -349,8 +349,8 @@ impl SecretsEngine {
         // Check if secret exists
         let existing = self
             .storage
-            .query_one::<(i64, Option<i64>)>(
-                "SELECT version, deleted_at FROM secrets WHERE path = ?",
+            .query_one::<(i64, Option<i64>, String)>(
+                "SELECT version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE path = ?",
                 &[path],
             )
             .await
@@ -358,13 +358,15 @@ impl SecretsEngine {
 
         let new_version: u32;
 
-        if let Some((current_version, deleted_at)) = existing {
-            // Secret exists
+        if let Some((current_version, deleted_at, row_mac)) = existing {
+            // Secret exists: authenticate the pointer before trusting its version.
+            let current_version = u32::try_from(current_version).unwrap_or(0);
+            let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+            self.verify_pointer_mac(path, current_version, &deleted_at_repr, &row_mac)?;
+
             if deleted_at.is_some() {
                 return Err(SecretsError::Deleted(path.to_string()));
             }
-
-            let current_version = u32::try_from(current_version).unwrap_or(0);
 
             // Check CAS if provided
             if let Some(expected) = options.cas {
@@ -757,20 +759,31 @@ impl SecretsEngine {
     pub async fn purge_deleted(&self, older_than: Duration) -> Result<u32, SecretsError> {
         let cutoff = Self::now().saturating_sub(older_than.as_secs());
 
-        // Get paths to purge
-        let paths = self
+        // Candidates: soft-deleted secrets older than the cutoff. Fetch the
+        // pointer fields so each row's MAC can be verified before the
+        // irreversible delete. A forged deleted_at on a live secret carries an
+        // invalid MAC and must be skipped, not purged, to prevent data loss.
+        let candidates = self
             .storage
-            .query_all::<(String,)>(
-                "SELECT path FROM secrets WHERE deleted_at IS NOT NULL AND deleted_at < ?",
+            .query_all::<(String, i64, Option<i64>, String)>(
+                "SELECT path, version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE deleted_at IS NOT NULL AND deleted_at < ?",
                 &[&cutoff.to_string()],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
 
-        // Secret count is bounded in practice; saturate at u32::MAX if somehow exceeded.
-        let count = u32::try_from(paths.len()).unwrap_or(u32::MAX);
+        let mut count: u32 = 0;
+        for (path, version, deleted_at, row_mac) in candidates {
+            let version = u32::try_from(version).unwrap_or(0);
+            let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+            if self
+                .verify_pointer_mac(&path, version, &deleted_at_repr, &row_mac)
+                .is_err()
+            {
+                warn!(path = path, "Skipping purge: invalid version-pointer MAC");
+                continue;
+            }
 
-        for (path,) in paths {
             // Delete versions first
             self.storage
                 .execute("DELETE FROM secret_versions WHERE path = ?", &[&path])
@@ -783,6 +796,7 @@ impl SecretsEngine {
                 .await
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
 
+            count = count.saturating_add(1);
             debug!(path = path, "Secret purged");
         }
 
@@ -929,6 +943,76 @@ mod tests {
         assert!(
             matches!(result, Err(SecretsError::Integrity(_))),
             "forged deleted_at must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_purge_skips_forged_delete_flag_on_live_secret() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/live", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Forge a past deleted_at on a LIVE secret (row_mac still authenticates
+        // the live state, so this row's MAC is now invalid).
+        engine
+            .storage
+            .execute(
+                "UPDATE secrets SET deleted_at = ? WHERE path = ?",
+                &["1", "app/live"],
+            )
+            .await
+            .unwrap();
+
+        let purged = engine
+            .purge_deleted(std::time::Duration::from_secs(0))
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 0,
+            "forged deleted_at on a live secret must not be purged"
+        );
+
+        let still_there = engine
+            .storage
+            .query_one::<(String,)>("SELECT path FROM secrets WHERE path = ?", &["app/live"])
+            .await
+            .unwrap();
+        assert!(
+            still_there.is_some(),
+            "forged-flag secret row must survive purge"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_put_rejects_rolled_back_pointer() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/pl", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .put("app/pl", test_data(), PutOptions::default())
+            .await
+            .unwrap(); // now v2
+
+        // Roll the pointer back to v1 without fixing row_mac.
+        engine
+            .storage
+            .execute(
+                "UPDATE secrets SET version = ? WHERE path = ?",
+                &["1", "app/pl"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine
+            .put("app/pl", test_data(), PutOptions::default())
+            .await;
+        assert!(
+            matches!(result, Err(SecretsError::Integrity(_))),
+            "put on a tampered pointer must fail closed, got {result:?}"
         );
     }
 
