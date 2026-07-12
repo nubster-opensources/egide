@@ -231,14 +231,16 @@ fn hex_encode(data: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, TransitError> {
-    if !s.len().is_multiple_of(2) {
+    let bytes = s.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return Err(TransitError::Storage("invalid hex length".into()));
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&s[i..i + 2], 16)
-                .map_err(|_| TransitError::Storage("invalid hex".into()))
+    bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair)
+                .map_err(|_| TransitError::Storage("invalid hex".into()))?;
+            u8::from_str_radix(text, 16).map_err(|_| TransitError::Storage("invalid hex".into()))
         })
         .collect()
 }
@@ -2004,5 +2006,12 @@ mod tests {
                 .min_decryption_version,
             2
         );
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_input_without_panicking() {
+        // A 4-byte UTF-8 char (U+10340) makes a byte-index slice fall inside a code point.
+        // The old code would panic with "byte index is not a char boundary".
+        assert!(hex_decode("𐍀").is_err());
     }
 }
