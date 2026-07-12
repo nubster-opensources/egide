@@ -222,7 +222,21 @@ impl SecretsEngine {
         Ok(hex_encode(&tag))
     }
 
-    /// Verifies the stored version-pointer MAC, failing closed on mismatch.
+    /// Verifies the stored version-pointer MAC, failing closed on any anomaly.
+    ///
+    /// Recomputes the keyed MAC over `(path, version, deleted_at_repr)` with the
+    /// same subkey as [`Self::pointer_mac`] and compares it, in constant time,
+    /// against the hex tag read from the `row_mac` column. The parameters are
+    /// authenticated inputs, not query fragments: they are fed into the injective
+    /// field encoding and the HMAC, never into any SQL statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretsError::Integrity`] if the stored tag is not valid hex or
+    /// does not match the recomputed MAC (a tampered, regressed, or absent
+    /// pointer), and propagates [`SecretsError::Crypto`] if subkey derivation or
+    /// the MAC computation itself fails. Callers must treat any error as a
+    /// refusal to trust the pointer.
     fn verify_pointer_mac(
         &self,
         path: &str,
