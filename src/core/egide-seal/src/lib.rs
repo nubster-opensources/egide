@@ -200,6 +200,7 @@ impl SealManager {
 
             // Check for dev mode
             if let Some(key_bytes) = self.storage.get(keys::DEV_MODE_KEY).await? {
+                let key_bytes = Zeroizing::new(key_bytes);
                 // The data directory was previously initialized in dev mode.
                 // Auto-unsealing must be refused just like the initial
                 // activation: a dev-mode data directory copied into a
@@ -273,7 +274,8 @@ impl SealManager {
             .collect();
 
         // Generate root token
-        let root_token = generate_token(32)?;
+        let root_token = egide_crypto::random::generate_token(32)
+            .map_err(|e| SealError::Crypto(e.to_string()))?;
         let root_token_hash = hash_token(&root_token)?;
 
         // Store configuration
@@ -301,7 +303,10 @@ impl SealManager {
 
         info!("Vault initialized successfully");
 
-        Ok(InitResult { root_token, shares })
+        Ok(InitResult {
+            root_token: root_token.as_str().to_owned(),
+            shares,
+        })
     }
 
     /// Submits a share for unsealing.
@@ -353,9 +358,11 @@ impl SealManager {
     fn reconstruct_master_key(&mut self) -> Result<(), SealError> {
         let sharks = Sharks(self.threshold);
 
-        let secret = sharks
-            .recover(&self.pending_shares)
-            .map_err(|_| SealError::ReconstructionFailed)?;
+        let secret = Zeroizing::new(
+            sharks
+                .recover(&self.pending_shares)
+                .map_err(|_| SealError::ReconstructionFailed)?,
+        );
 
         // Verify the reconstructed key matches expected HMAC
         let expected_hmac = self.expected_hmac.as_ref().ok_or_else(|| {
@@ -444,7 +451,8 @@ impl SealManager {
         let master_key_hmac = compute_master_key_hmac(master_key.as_bytes())?;
 
         // Generate root token
-        let root_token = generate_token(32)?;
+        let root_token = egide_crypto::random::generate_token(32)
+            .map_err(|e| SealError::Crypto(e.to_string()))?;
         let root_token_hash = hash_token(&root_token)?;
 
         let now = current_unix_secs()?;
@@ -470,7 +478,7 @@ impl SealManager {
         self.dev_mode = true;
         self.threshold = 1;
 
-        warn!("Dev mode enabled - root token: {}", root_token);
+        warn!("Dev mode enabled - root token: {}", root_token.as_str());
 
         Ok(())
     }
@@ -528,19 +536,6 @@ fn compute_master_key_hmac(master_key: &[u8]) -> Result<Vec<u8>, SealError> {
 /// bytes), so a length mismatch may return early.
 fn hmac_tags_match(computed: &[u8], expected: &[u8]) -> bool {
     computed.ct_eq(expected).into()
-}
-
-/// Generates a random token as hex string.
-///
-/// Returns a [`SealError::Crypto`] if the operating system's CSPRNG fails
-/// to produce output.
-fn generate_token(bytes: usize) -> Result<String, SealError> {
-    use rand::TryRng;
-    let mut buf = Zeroizing::new(vec![0u8; bytes]);
-    rand::rngs::SysRng
-        .try_fill_bytes(&mut buf)
-        .map_err(|e| SealError::Crypto(e.to_string()))?;
-    Ok(hex_encode(&buf))
 }
 
 /// Hashes a token with Argon2id.
