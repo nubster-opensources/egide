@@ -29,7 +29,7 @@ use crate::{ServiceContext, ServiceError};
 /// | `VersionBelowMinEncryption` / `VersionBelowMinDecryption`   |                           |
 /// | `DecryptionFailed`                                          | `DecryptionFailed`        |
 /// | `OperationNotAllowed` / `NotExportable` / `DeletionNotAllowed` | `Forbidden`            |
-/// | `Storage` / `Crypto` / `Integrity`                          | `Internal`                |
+/// | `Storage` / `Crypto` / `Integrity` / `Clock`                | `Internal`                |
 fn map_transit_error(err: TransitError) -> ServiceError {
     match err {
         TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
@@ -55,6 +55,7 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         TransitError::Storage(msg) | TransitError::Crypto(msg) | TransitError::Integrity(msg) => {
             ServiceError::Internal(msg)
         },
+        TransitError::Clock => ServiceError::Internal("transit clock error".into()),
     }
 }
 
