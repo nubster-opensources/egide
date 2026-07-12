@@ -479,8 +479,19 @@ impl TransitEngine {
     fn policy_mac(&self, key: &TransitKey) -> Result<String, TransitError> {
         let subkey =
             kdf::derive_encryption_key(self.master_key.as_bytes(), TRANSIT_POLICY_MAC_INFO)?;
+        let data = Self::policy_mac_input(key)?;
+        let tag = mac::compute_mac(&subkey[..], &data).map_err(TransitError::from)?;
+        Ok(hex_encode(&tag))
+    }
+
+    /// Canonical MAC input over the policy row's decision fields.
+    ///
+    /// The single source of truth for what the policy MAC covers, shared by
+    /// [`Self::policy_mac`] and [`Self::verify_policy_mac`] so the compute and
+    /// the check can never drift apart.
+    fn policy_mac_input(key: &TransitKey) -> Result<Vec<u8>, TransitError> {
         let key_type_repr = key.key_type.to_string();
-        let data = mac::encode_fields(&[
+        mac::encode_fields(&[
             key.name.as_bytes(),
             key_type_repr.as_bytes(),
             &key.latest_version.to_be_bytes(),
@@ -492,9 +503,7 @@ impl TransitEngine {
             &[u8::from(key.exportable)],
             &[u8::from(key.deletion_allowed)],
         ])
-        .map_err(TransitError::from)?;
-        let tag = mac::compute_mac(&subkey[..], &data).map_err(TransitError::from)?;
-        Ok(hex_encode(&tag))
+        .map_err(TransitError::from)
     }
 
     /// Verifies the stored policy-row MAC, failing closed on any anomaly.
@@ -512,20 +521,7 @@ impl TransitEngine {
     fn verify_policy_mac(&self, key: &TransitKey, stored_hex: &str) -> Result<(), TransitError> {
         let subkey =
             kdf::derive_encryption_key(self.master_key.as_bytes(), TRANSIT_POLICY_MAC_INFO)?;
-        let key_type_repr = key.key_type.to_string();
-        let data = mac::encode_fields(&[
-            key.name.as_bytes(),
-            key_type_repr.as_bytes(),
-            &key.latest_version.to_be_bytes(),
-            &key.min_encryption_version.to_be_bytes(),
-            &key.min_decryption_version.to_be_bytes(),
-            &[u8::from(key.supports_encryption)],
-            &[u8::from(key.supports_decryption)],
-            &[u8::from(key.supports_derivation)],
-            &[u8::from(key.exportable)],
-            &[u8::from(key.deletion_allowed)],
-        ])
-        .map_err(TransitError::from)?;
+        let data = Self::policy_mac_input(key)?;
         let stored = hex_decode(stored_hex).map_err(|_| {
             TransitError::Integrity(format!("invalid policy mac encoding for {}", key.name))
         })?;
@@ -579,7 +575,9 @@ impl TransitEngine {
 
         let key = TransitKey {
             name: name.clone(),
-            key_type: key_type.parse()?,
+            key_type: key_type.parse().map_err(|_| {
+                TransitError::Integrity(format!("unparsable key_type for key {name}"))
+            })?,
             latest_version: parse_u32(&latest_version, "latest_version")?,
             min_encryption_version: parse_u32(&min_enc, "min_encryption_version")?,
             min_decryption_version: parse_u32(&min_dec, "min_decryption_version")?,
@@ -1926,6 +1924,37 @@ mod tests {
         assert!(
             matches!(result, Err(TransitError::Integrity(_))),
             "flipped exportable must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tampered_valid_key_type_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("ktype", KeyConfig::default())
+            .await
+            .unwrap();
+
+        // Read the current key_type, pick a different valid one, and write it
+        // without a valid MAC. The MAC (which covers key_type) must reject it.
+        let current = engine.get_key("ktype").await.unwrap();
+        let other = match current.key_type {
+            KeyType::Aes256Gcm => "chacha20-poly1305",
+            KeyType::ChaCha20Poly1305 => "aes256-gcm",
+        };
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ? WHERE name = ?",
+                &[other, "ktype"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_key("ktype").await;
+        assert!(
+            matches!(result, Err(TransitError::Integrity(_))),
+            "a tampered-but-valid key_type must fail closed, got {result:?}"
         );
     }
 
