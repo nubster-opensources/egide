@@ -27,7 +27,7 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use egide_crypto::{aead, kdf, mac, random, MasterKey};
 use egide_storage_sqlite::SqliteBackend;
@@ -324,7 +324,7 @@ impl TransitEngine {
         version: u32,
         encrypted: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, TransitError> {
+    ) -> Result<Zeroizing<Vec<u8>>, TransitError> {
         let wrapping_key = self.derive_version_key(name, version)?;
         let aad = format!("transit-key:{name}:{version}");
 
@@ -334,11 +334,15 @@ impl TransitEngine {
         ciphertext.extend_from_slice(encrypted);
 
         let decrypted = aead::decrypt(&wrapping_key, &ciphertext, Some(aad.as_bytes()))?;
-        Ok(decrypted.to_vec())
+        Ok(decrypted)
     }
 
     /// Gets the raw key material for a specific version.
-    async fn get_key_material(&self, name: &str, version: u32) -> Result<Vec<u8>, TransitError> {
+    async fn get_key_material(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Zeroizing<Vec<u8>>, TransitError> {
         let row = self
             .storage
             .query_one::<(String, String)>(
