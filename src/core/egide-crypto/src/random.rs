@@ -52,9 +52,9 @@ pub fn generate_nonce() -> Result<[u8; NONCE_SIZE], CryptoError> {
 ///
 /// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
 /// CSPRNG fails to produce output.
-pub fn generate_bytes(len: usize) -> Result<Vec<u8>, CryptoError> {
-    let mut bytes = vec![0u8; len];
-    fill_random(&mut bytes)?;
+pub fn generate_bytes(len: usize) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let mut bytes = Zeroizing::new(vec![0u8; len]);
+    fill_random(bytes.as_mut_slice())?;
     Ok(bytes)
 }
 
@@ -68,9 +68,9 @@ pub fn generate_bytes(len: usize) -> Result<Vec<u8>, CryptoError> {
 ///
 /// Returns a [`CryptoError::RandomGenerationFailed`] if the operating system's
 /// CSPRNG fails to produce output.
-pub fn generate_token(byte_len: usize) -> Result<String, CryptoError> {
+pub fn generate_token(byte_len: usize) -> Result<Zeroizing<String>, CryptoError> {
     let bytes = generate_bytes(byte_len)?;
-    Ok(hex_encode(&bytes))
+    Ok(Zeroizing::new(hex_encode(&bytes)))
 }
 
 /// Encodes bytes as lowercase hexadecimal.
@@ -134,7 +134,10 @@ mod tests {
         let mut seen = HashSet::new();
         for _ in 0..100 {
             let token = generate_token(8).unwrap();
-            assert!(seen.insert(token), "duplicate token generated");
+            assert!(
+                seen.insert(token.as_str().to_owned()),
+                "duplicate token generated"
+            );
         }
     }
 }
