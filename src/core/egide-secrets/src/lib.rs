@@ -850,13 +850,16 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Decodes hex to bytes.
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
-    if !hex.len().is_multiple_of(2) {
+    let bytes = hex.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return Err("odd length hex string".into());
     }
-
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| e.to_string()))
+    bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
+            u8::from_str_radix(s, 16).map_err(|e| e.to_string())
+        })
         .collect()
 }
 
@@ -1679,5 +1682,13 @@ mod tests {
             let secret = engine.get_version("app/rotated", i).await.unwrap();
             assert_eq!(secret.data.get("counter").unwrap(), &i.to_string());
         }
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_input_without_panicking() {
+        // A multi-byte UTF-8 char would make a byte-index slice fall inside a code point.
+        // Using a 4-byte UTF-8 character (U+10340) to ensure the slice at [0..2] is incomplete.
+        assert!(hex_decode("𐍀").is_err());
+        assert!(hex_decode("𐍀𐍀").is_err());
     }
 }
