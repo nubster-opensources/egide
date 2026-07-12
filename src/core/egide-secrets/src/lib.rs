@@ -417,7 +417,11 @@ impl SecretsEngine {
         let expires_at: Option<u64> = if expires_at_str.is_empty() {
             None
         } else {
-            expires_at_str.parse().ok()
+            Some(expires_at_str.parse().map_err(|_| {
+                SecretsError::Integrity(format!(
+                    "unparsable expires_at for {path} v{version}"
+                ))
+            })?)
         };
 
         // Check expiration
@@ -582,10 +586,14 @@ impl SecretsEngine {
                     let expires_at: Option<u64> = if expires_at_str.is_empty() {
                         None
                     } else {
-                        expires_at_str.parse().ok()
+                        Some(expires_at_str.parse().map_err(|_| {
+                            SecretsError::Integrity(format!(
+                                "unparsable expires_at in versions list for {path}"
+                            ))
+                        })?)
                     };
                     let expired = expires_at.is_some_and(|e| e < now);
-                    SecretVersionInfo {
+                    Ok(SecretVersionInfo {
                         version,
                         created_at,
                         expires_at,
@@ -595,10 +603,10 @@ impl SecretsEngine {
                             Some(created_by)
                         },
                         expired,
-                    }
+                    })
                 },
             )
-            .collect();
+            .collect::<Result<Vec<_>, SecretsError>>()?;
 
         Ok(results)
     }
@@ -1156,6 +1164,54 @@ mod tests {
         assert!(matches!(result_v1, Err(SecretsError::Crypto(_))));
         let result_v2 = engine.get_version("app/spliced", 2).await;
         assert!(matches!(result_v2, Err(SecretsError::Crypto(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_version_rejects_unparsable_expires_at() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/ttl", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Corrupt expires_at to a non-numeric value in storage.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET expires_at = ? WHERE path = ? AND version = 1",
+                &["not-a-number", "app/ttl"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_version("app/ttl", 1).await;
+        assert!(
+            matches!(result, Err(SecretsError::Integrity(_))),
+            "unparsable expires_at must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_versions_rejects_unparsable_expires_at() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/ttl", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET expires_at = ? WHERE path = ? AND version = 1",
+                &["not-a-number", "app/ttl"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.versions("app/ttl").await;
+        assert!(
+            matches!(result, Err(SecretsError::Integrity(_))),
+            "unparsable expires_at must fail closed in versions list, got {result:?}"
+        );
     }
 
     #[tokio::test]
