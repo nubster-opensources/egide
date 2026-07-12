@@ -20,9 +20,11 @@
 //! races, purge then re-create) stay far below the NIST SP 800-38D bound on
 //! random 96-bit nonces (2^32 messages per key), regardless of rotation rate.
 //!
-//! The AEAD associated data is `"egide-secrets:{path}:{version}"`, sealing
-//! each ciphertext to its storage coordinates: moving or swapping encrypted
-//! blobs between rows fails authentication.
+//! The AEAD associated data is a canonical length-prefixed encoding of the
+//! domain tag, `path`, `version`, and the immutable per-version context columns
+//! `expires_at` and `metadata`. It seals each ciphertext to its storage
+//! coordinates and to that context: moving or swapping blobs between rows, or
+//! tampering with the expiry or metadata columns, fails authentication.
 //!
 //! Alternatives considered and rejected: XChaCha20-Poly1305 (larger nonce
 //! but a new dependency, divergence from the AES-256-GCM doctrine used
@@ -39,7 +41,7 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
-use egide_crypto::{aead, kdf, MasterKey};
+use egide_crypto::{aead, kdf, mac, MasterKey};
 use egide_storage_sqlite::SqliteBackend;
 
 pub use error::SecretsError;
@@ -172,8 +174,25 @@ impl SecretsEngine {
     }
 
     /// Builds the AEAD associated data sealing a ciphertext to its row.
-    fn secret_aad(path: &str, version: u32) -> String {
-        format!("{SECRET_AAD_PREFIX}{path}:{version}")
+    ///
+    /// Binds the storage coordinates (`path`, `version`) and the immutable
+    /// per-version context columns (`expires_at`, `metadata`) using a canonical
+    /// length-prefixed encoding. The exact stored string forms are bound, so a
+    /// tamper of either column makes decryption fail closed.
+    fn secret_aad(
+        path: &str,
+        version: u32,
+        expires_at_repr: &str,
+        metadata_repr: &str,
+    ) -> Result<Vec<u8>, SecretsError> {
+        mac::encode_fields(&[
+            SECRET_AAD_PREFIX.as_bytes(),
+            path.as_bytes(),
+            &version.to_be_bytes(),
+            expires_at_repr.as_bytes(),
+            metadata_repr.as_bytes(),
+        ])
+        .map_err(SecretsError::from)
     }
 
     /// Encrypts secret data for storage.
@@ -181,14 +200,16 @@ impl SecretsEngine {
         &self,
         path: &str,
         version: u32,
+        expires_at_repr: &str,
+        metadata_repr: &str,
         data: &HashMap<String, String>,
     ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
         let key = self.derive_secret_key(path, version)?;
         let plaintext = serde_json::to_vec(data)
             .map_err(|e| SecretsError::Crypto(format!("serialization failed: {e}")))?;
 
-        let aad = Self::secret_aad(path, version);
-        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(aad.as_bytes()))?;
+        let aad = Self::secret_aad(path, version, expires_at_repr, metadata_repr)?;
+        let ciphertext = aead::encrypt(key.as_bytes(), &plaintext, Some(&aad))?;
 
         // Extract nonce from ciphertext (first 12 bytes in our format)
         let nonce = ciphertext[..12].to_vec();
@@ -202,6 +223,8 @@ impl SecretsEngine {
         &self,
         path: &str,
         version: u32,
+        expires_at_repr: &str,
+        metadata_repr: &str,
         data: &[u8],
         nonce: &[u8],
     ) -> Result<HashMap<String, String>, SecretsError> {
@@ -212,8 +235,8 @@ impl SecretsEngine {
         ciphertext.extend_from_slice(nonce);
         ciphertext.extend_from_slice(data);
 
-        let aad = Self::secret_aad(path, version);
-        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(aad.as_bytes()))?;
+        let aad = Self::secret_aad(path, version, expires_at_repr, metadata_repr)?;
+        let plaintext = aead::decrypt(key.as_bytes(), &ciphertext, Some(&aad))?;
 
         serde_json::from_slice(&plaintext)
             .map_err(|e| SecretsError::Crypto(format!("deserialization failed: {e}")))
@@ -332,8 +355,14 @@ impl SecretsEngine {
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
         }
 
+        // The exact stored string forms of the immutable per-version context,
+        // bound into the AAD so a later tamper of either column fails closed.
+        let expires_at_repr = expires_at.map(|e| e.to_string()).unwrap_or_default();
+        let metadata_repr = metadata_json.unwrap_or_default();
+
         // Encrypt and store version data
-        let (encrypted_data, nonce) = self.encrypt_data(path, new_version, &data)?;
+        let (encrypted_data, nonce) =
+            self.encrypt_data(path, new_version, &expires_at_repr, &metadata_repr, &data)?;
 
         self.storage
             .execute(
@@ -343,8 +372,8 @@ impl SecretsEngine {
                     &new_version.to_string(),
                     &hex_encode(&encrypted_data),
                     &hex_encode(&nonce),
-                    &expires_at.map(|e| e.to_string()).unwrap_or_default(),
-                    &metadata_json.unwrap_or_default(),
+                    &expires_at_repr,
+                    &metadata_repr,
                     &now.to_string(),
                     &self.storage.current_actor().unwrap_or_default(),
                 ],
@@ -418,9 +447,7 @@ impl SecretsEngine {
             None
         } else {
             Some(expires_at_str.parse().map_err(|_| {
-                SecretsError::Integrity(format!(
-                    "unparsable expires_at for {path} v{version}"
-                ))
+                SecretsError::Integrity(format!("unparsable expires_at for {path} v{version}"))
             })?)
         };
 
@@ -438,7 +465,14 @@ impl SecretsEngine {
         let nonce_bytes = hex_decode(&nonce_hex)
             .map_err(|e| SecretsError::Storage(format!("invalid nonce encoding: {e}")))?;
 
-        let data = self.decrypt_data(path, version, &data_bytes, &nonce_bytes)?;
+        let data = self.decrypt_data(
+            path,
+            version,
+            &expires_at_str,
+            &metadata_json,
+            &data_bytes,
+            &nonce_bytes,
+        )?;
 
         let metadata = if metadata_json.is_empty() {
             None
@@ -733,6 +767,85 @@ mod tests {
         data.insert("username".to_string(), "admin".to_string());
         data.insert("password".to_string(), "s3cr3t".to_string());
         data
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_with_ttl_and_metadata() {
+        let (_tmp, engine) = setup().await;
+        let opts = PutOptions {
+            ttl: Some(std::time::Duration::from_hours(1)),
+            metadata: Some(serde_json::json!({"env": "prod"})),
+            cas: None,
+        };
+        engine.put("app/full", test_data(), opts).await.unwrap();
+
+        let secret = engine.get_version("app/full", 1).await.unwrap();
+        assert_eq!(secret.data, test_data());
+        assert!(secret.expires_at.is_some());
+        assert_eq!(secret.metadata, Some(serde_json::json!({"env": "prod"})));
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_without_ttl_or_metadata() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/bare", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        let secret = engine.get_version("app/bare", 1).await.unwrap();
+        assert_eq!(secret.data, test_data());
+    }
+
+    #[tokio::test]
+    async fn test_tampered_metadata_fails_decryption() {
+        let (_tmp, engine) = setup().await;
+        let opts = PutOptions {
+            ttl: None,
+            metadata: Some(serde_json::json!({"role": "admin"})),
+            cas: None,
+        };
+        engine.put("app/meta", test_data(), opts).await.unwrap();
+
+        // Substitute metadata with valid JSON that parses but was not authenticated.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET metadata = ? WHERE path = ? AND version = 1",
+                &[r#"{"role":"guest"}"#, "app/meta"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_version("app/meta", 1).await;
+        assert!(result.is_err(), "tampered metadata must not decrypt");
+        assert!(
+            result.is_err(),
+            "must never return the secret under substituted metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tampered_expires_at_fails_decryption() {
+        let (_tmp, engine) = setup().await;
+        let opts = PutOptions {
+            ttl: Some(std::time::Duration::from_hours(1)),
+            metadata: None,
+            cas: None,
+        };
+        engine.put("app/exp", test_data(), opts).await.unwrap();
+
+        // Extend the TTL to a far future value that parses fine but was not authenticated.
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET expires_at = ? WHERE path = ? AND version = 1",
+                &["9999999999", "app/exp"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_version("app/exp", 1).await;
+        assert!(result.is_err(), "tampered expires_at must not decrypt");
     }
 
     #[tokio::test]
