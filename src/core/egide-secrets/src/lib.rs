@@ -817,10 +817,9 @@ mod tests {
             .unwrap();
 
         let result = engine.get_version("app/meta", 1).await;
-        assert!(result.is_err(), "tampered metadata must not decrypt");
         assert!(
             result.is_err(),
-            "must never return the secret under substituted metadata"
+            "tampered metadata must never decrypt or return the secret"
         );
     }
 
