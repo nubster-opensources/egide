@@ -56,6 +56,9 @@ const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v2:";
 /// Domain separation for the AEAD associated data.
 const SECRET_AAD_PREFIX: &str = "egide-secrets:";
 
+/// Domain separation for the version-pointer row MAC subkey.
+const SECRET_POINTER_MAC_INFO: &[u8] = b"egide-secrets-pointer-mac-v1";
+
 /// SQL schema for secrets tables.
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS secrets (
@@ -63,7 +66,8 @@ CREATE TABLE IF NOT EXISTS secrets (
     version     INTEGER NOT NULL DEFAULT 1,
     deleted_at  INTEGER,
     created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
+    updated_at  INTEGER NOT NULL,
+    row_mac     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS secret_versions (
@@ -193,6 +197,28 @@ impl SecretsEngine {
             metadata_repr.as_bytes(),
         ])
         .map_err(SecretsError::from)
+    }
+
+    /// Computes the hex-encoded keyed MAC authenticating the version pointer.
+    ///
+    /// Binds `(path, version, deleted_at)` under a subkey derived from the
+    /// master key, so a storage-level rollback of the pointer or a flip of the
+    /// soft-delete flag is detected on read.
+    fn pointer_mac(
+        &self,
+        path: &str,
+        version: u32,
+        deleted_at_repr: &str,
+    ) -> Result<String, SecretsError> {
+        let subkey = kdf::derive_encryption_key(self.master_key.as_bytes(), SECRET_POINTER_MAC_INFO)?;
+        let data = mac::encode_fields(&[
+            path.as_bytes(),
+            &version.to_be_bytes(),
+            deleted_at_repr.as_bytes(),
+        ])
+        .map_err(SecretsError::from)?;
+        let tag = mac::compute_mac(&subkey[..], &data).map_err(SecretsError::from)?;
+        Ok(hex_encode(&tag))
     }
 
     /// Encrypts secret data for storage.
@@ -330,10 +356,16 @@ impl SecretsEngine {
             new_version = current_version + 1;
 
             // Update secrets table
+            let row_mac = self.pointer_mac(path, new_version, "")?;
             self.storage
                 .execute(
-                    "UPDATE secrets SET version = ?, updated_at = ? WHERE path = ?",
-                    &[&i64::from(new_version).to_string(), &now.to_string(), path],
+                    "UPDATE secrets SET version = ?, updated_at = ?, row_mac = ? WHERE path = ?",
+                    &[
+                        &i64::from(new_version).to_string(),
+                        &now.to_string(),
+                        &row_mac,
+                        path,
+                    ],
                 )
                 .await
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
@@ -346,10 +378,17 @@ impl SecretsEngine {
             new_version = 1;
 
             // Insert into secrets table
+            let row_mac = self.pointer_mac(path, new_version, "")?;
             self.storage
                 .execute(
-                    "INSERT INTO secrets (path, version, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                    &[path, &new_version.to_string(), &now.to_string(), &now.to_string()],
+                    "INSERT INTO secrets (path, version, created_at, updated_at, row_mac) VALUES (?, ?, ?, ?, ?)",
+                    &[
+                        path,
+                        &new_version.to_string(),
+                        &now.to_string(),
+                        &now.to_string(),
+                        &row_mac,
+                    ],
                 )
                 .await
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
@@ -507,16 +546,18 @@ impl SecretsEngine {
             .map_err(|e| SecretsError::Storage(e.to_string()))?
             .ok_or_else(|| SecretsError::NotFound(path.to_string()))?;
 
-        let (_, deleted_at) = row;
+        let (version, deleted_at) = row;
         if deleted_at.is_some() {
             return Err(SecretsError::Deleted(path.to_string()));
         }
 
         let now = Self::now();
+        let version = u32::try_from(version).unwrap_or(0);
+        let row_mac = self.pointer_mac(path, version, &now.to_string())?;
         self.storage
             .execute(
-                "UPDATE secrets SET deleted_at = ? WHERE path = ?",
-                &[&now.to_string(), path],
+                "UPDATE secrets SET deleted_at = ?, row_mac = ? WHERE path = ?",
+                &[&now.to_string(), &row_mac, path],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
@@ -539,15 +580,17 @@ impl SecretsEngine {
             .map_err(|e| SecretsError::Storage(e.to_string()))?
             .ok_or_else(|| SecretsError::NotFound(path.to_string()))?;
 
-        let (_, deleted_at) = row;
+        let (version, deleted_at) = row;
         if deleted_at.is_none() {
             return Err(SecretsError::NotDeleted(path.to_string()));
         }
 
+        let version = u32::try_from(version).unwrap_or(0);
+        let row_mac = self.pointer_mac(path, version, "")?;
         self.storage
             .execute(
-                "UPDATE secrets SET deleted_at = NULL, updated_at = ? WHERE path = ?",
-                &[&Self::now().to_string(), path],
+                "UPDATE secrets SET deleted_at = NULL, updated_at = ?, row_mac = ? WHERE path = ?",
+                &[&Self::now().to_string(), &row_mac, path],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
@@ -767,6 +810,30 @@ mod tests {
         data.insert("username".to_string(), "admin".to_string());
         data.insert("password".to_string(), "s3cr3t".to_string());
         data
+    }
+
+    #[tokio::test]
+    async fn test_put_populates_pointer_mac() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/p", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        let row_mac: (String,) = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(row_mac, '') FROM secrets WHERE path = ?",
+                &["app/p"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!row_mac.0.is_empty(), "row_mac must be populated on put");
+
+        // The stored tag must be the MAC over (path, version=1, deleted_at="").
+        let expected = engine.pointer_mac("app/p", 1, "").unwrap();
+        assert_eq!(row_mac.0, expected);
     }
 
     #[tokio::test]
