@@ -29,12 +29,15 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use egide_crypto::{aead, kdf, random, MasterKey};
+use egide_crypto::{aead, kdf, mac, random, MasterKey};
 use egide_storage_sqlite::SqliteBackend;
 
 // ============================================================================
 // SQL Schema
 // ============================================================================
+
+/// Domain separation for the policy-row MAC subkey.
+const TRANSIT_POLICY_MAC_INFO: &[u8] = b"egide-transit-policy-mac-v1";
 
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS transit_keys (
@@ -49,7 +52,8 @@ CREATE TABLE IF NOT EXISTS transit_keys (
     exportable      INTEGER NOT NULL DEFAULT 0,
     deletion_allowed INTEGER NOT NULL DEFAULT 0,
     created_at      INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL
+    updated_at      INTEGER NOT NULL,
+    row_mac         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transit_key_versions (
@@ -410,10 +414,26 @@ impl TransitEngine {
         let raw_key = random::generate_key()?;
         let (encrypted_key, nonce) = self.encrypt_key_material(name, 1, raw_key.as_ref())?;
 
+        let key = TransitKey {
+            name: name.to_string(),
+            key_type: config.key_type,
+            latest_version: 1,
+            min_encryption_version: 1,
+            min_decryption_version: 1,
+            supports_encryption: config.supports_encryption,
+            supports_decryption: config.supports_decryption,
+            supports_derivation: config.supports_derivation,
+            exportable: config.exportable,
+            deletion_allowed: config.deletion_allowed,
+            created_at: now,
+            updated_at: now,
+        };
+        let row_mac = self.policy_mac(&key)?;
+
         // Insert key metadata
         self.storage
             .execute(
-                "INSERT INTO transit_keys (name, key_type, latest_version, min_encryption_version, min_decryption_version, supports_encryption, supports_decryption, supports_derivation, exportable, deletion_allowed, created_at, updated_at) VALUES (?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO transit_keys (name, key_type, latest_version, min_encryption_version, min_decryption_version, supports_encryption, supports_decryption, supports_derivation, exportable, deletion_allowed, created_at, updated_at, row_mac) VALUES (?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
                 &[
                     name,
                     &config.key_type.to_string(),
@@ -424,6 +444,7 @@ impl TransitEngine {
                     &i32::from(config.deletion_allowed).to_string(),
                     &now.to_string(),
                     &now.to_string(),
+                    &row_mac,
                 ],
             )
             .await
@@ -445,20 +466,67 @@ impl TransitEngine {
 
         info!(name = name, key_type = %config.key_type, "Transit key created");
 
-        Ok(TransitKey {
-            name: name.to_string(),
-            key_type: config.key_type,
-            latest_version: 1,
-            min_encryption_version: 1,
-            min_decryption_version: 1,
-            supports_encryption: config.supports_encryption,
-            supports_decryption: config.supports_decryption,
-            supports_derivation: config.supports_derivation,
-            exportable: config.exportable,
-            deletion_allowed: config.deletion_allowed,
-            created_at: now,
-            updated_at: now,
-        })
+        Ok(key)
+    }
+
+    /// Computes the hex-encoded keyed MAC authenticating a key's policy row.
+    ///
+    /// Binds every field that governs a security decision (`name`, `key_type`,
+    /// `latest_version`, `min_encryption_version`, `min_decryption_version`, the
+    /// four capability/exportability/deletion flags) under a subkey derived from
+    /// the master key, so a storage-level tamper of any of them is detected on
+    /// read. Timestamps are excluded: they govern no decision.
+    fn policy_mac(&self, key: &TransitKey) -> Result<String, TransitError> {
+        let subkey =
+            kdf::derive_encryption_key(self.master_key.as_bytes(), TRANSIT_POLICY_MAC_INFO)?;
+        let data = Self::policy_mac_input(key)?;
+        let tag = mac::compute_mac(&subkey[..], &data).map_err(TransitError::from)?;
+        Ok(hex_encode(&tag))
+    }
+
+    /// Canonical MAC input over the policy row's decision fields.
+    ///
+    /// The single source of truth for what the policy MAC covers, shared by
+    /// [`Self::policy_mac`] and [`Self::verify_policy_mac`] so the compute and
+    /// the check can never drift apart.
+    fn policy_mac_input(key: &TransitKey) -> Result<Vec<u8>, TransitError> {
+        let key_type_repr = key.key_type.to_string();
+        mac::encode_fields(&[
+            key.name.as_bytes(),
+            key_type_repr.as_bytes(),
+            &key.latest_version.to_be_bytes(),
+            &key.min_encryption_version.to_be_bytes(),
+            &key.min_decryption_version.to_be_bytes(),
+            &[u8::from(key.supports_encryption)],
+            &[u8::from(key.supports_decryption)],
+            &[u8::from(key.supports_derivation)],
+            &[u8::from(key.exportable)],
+            &[u8::from(key.deletion_allowed)],
+        ])
+        .map_err(TransitError::from)
+    }
+
+    /// Verifies the stored policy-row MAC, failing closed on any anomaly.
+    ///
+    /// Recomputes the MAC over the same decision fields as [`Self::policy_mac`]
+    /// and compares it, in constant time, against the hex tag from the `row_mac`
+    /// column. The key fields are authenticated inputs, not query fragments.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitError::Integrity`] if the stored tag is not valid hex or
+    /// does not match (a tampered or absent policy row), and propagates a
+    /// [`TransitError::Crypto`] if subkey derivation or the MAC computation
+    /// fails. Any error means the policy row must not be trusted.
+    fn verify_policy_mac(&self, key: &TransitKey, stored_hex: &str) -> Result<(), TransitError> {
+        let subkey =
+            kdf::derive_encryption_key(self.master_key.as_bytes(), TRANSIT_POLICY_MAC_INFO)?;
+        let data = Self::policy_mac_input(key)?;
+        let stored = hex_decode(stored_hex).map_err(|_| {
+            TransitError::Integrity(format!("invalid policy mac encoding for {}", key.name))
+        })?;
+        mac::verify_mac(&subkey[..], &data, &stored)
+            .map_err(|_| TransitError::Integrity(format!("policy mac mismatch for {}", key.name)))
     }
 
     /// Gets metadata for a transit key.
@@ -467,8 +535,8 @@ impl TransitEngine {
 
         let row = self
             .storage
-            .query_one::<(String, String, String, String, String, String, String, String, String, String, String, String)>(
-                "SELECT name, key_type, CAST(latest_version AS TEXT), CAST(min_encryption_version AS TEXT), CAST(min_decryption_version AS TEXT), CAST(supports_encryption AS TEXT), CAST(supports_decryption AS TEXT), CAST(supports_derivation AS TEXT), CAST(exportable AS TEXT), CAST(deletion_allowed AS TEXT), CAST(created_at AS TEXT), CAST(updated_at AS TEXT) FROM transit_keys WHERE name = ?",
+            .query_one::<(String, String, String, String, String, String, String, String, String, String, String, String, String)>(
+                "SELECT name, key_type, CAST(latest_version AS TEXT), CAST(min_encryption_version AS TEXT), CAST(min_decryption_version AS TEXT), CAST(supports_encryption AS TEXT), CAST(supports_decryption AS TEXT), CAST(supports_derivation AS TEXT), CAST(exportable AS TEXT), CAST(deletion_allowed AS TEXT), CAST(created_at AS TEXT), CAST(updated_at AS TEXT), COALESCE(row_mac, '') FROM transit_keys WHERE name = ?",
                 &[name],
             )
             .await
@@ -488,22 +556,42 @@ impl TransitEngine {
             del,
             created,
             updated,
+            row_mac,
         ) = row;
 
-        Ok(TransitKey {
-            name,
-            key_type: key_type.parse()?,
-            latest_version: latest_version.parse().unwrap_or(1),
-            min_encryption_version: min_enc.parse().unwrap_or(1),
-            min_decryption_version: min_dec.parse().unwrap_or(1),
-            supports_encryption: enc.parse::<i32>().unwrap_or(1) != 0,
-            supports_decryption: dec.parse::<i32>().unwrap_or(1) != 0,
-            supports_derivation: deriv.parse::<i32>().unwrap_or(0) != 0,
-            exportable: export.parse::<i32>().unwrap_or(0) != 0,
-            deletion_allowed: del.parse::<i32>().unwrap_or(0) != 0,
-            created_at: created.parse().unwrap_or(0),
-            updated_at: updated.parse().unwrap_or(0),
-        })
+        let parse_u32 = |s: &str, field: &str| -> Result<u32, TransitError> {
+            s.parse()
+                .map_err(|_| TransitError::Integrity(format!("unparsable {field} for key {name}")))
+        };
+        let parse_u64 = |s: &str, field: &str| -> Result<u64, TransitError> {
+            s.parse()
+                .map_err(|_| TransitError::Integrity(format!("unparsable {field} for key {name}")))
+        };
+        let parse_flag = |s: &str, field: &str| -> Result<bool, TransitError> {
+            s.parse::<i32>()
+                .map(|v| v != 0)
+                .map_err(|_| TransitError::Integrity(format!("unparsable {field} for key {name}")))
+        };
+
+        let key = TransitKey {
+            name: name.clone(),
+            key_type: key_type.parse().map_err(|_| {
+                TransitError::Integrity(format!("unparsable key_type for key {name}"))
+            })?,
+            latest_version: parse_u32(&latest_version, "latest_version")?,
+            min_encryption_version: parse_u32(&min_enc, "min_encryption_version")?,
+            min_decryption_version: parse_u32(&min_dec, "min_decryption_version")?,
+            supports_encryption: parse_flag(&enc, "supports_encryption")?,
+            supports_decryption: parse_flag(&dec, "supports_decryption")?,
+            supports_derivation: parse_flag(&deriv, "supports_derivation")?,
+            exportable: parse_flag(&export, "exportable")?,
+            deletion_allowed: parse_flag(&del, "deletion_allowed")?,
+            created_at: parse_u64(&created, "created_at")?,
+            updated_at: parse_u64(&updated, "updated_at")?,
+        };
+
+        self.verify_policy_mac(&key, &row_mac)?;
+        Ok(key)
     }
 
     /// Lists all transit key names.
@@ -570,11 +658,18 @@ impl TransitEngine {
             .await
             .map_err(|e| TransitError::Storage(e.to_string()))?;
 
+        let updated = TransitKey {
+            latest_version: new_version,
+            updated_at: now,
+            ..key
+        };
+        let row_mac = self.policy_mac(&updated)?;
+
         // Update latest version
         self.storage
             .execute(
-                "UPDATE transit_keys SET latest_version = ?, updated_at = ? WHERE name = ?",
-                &[&new_version.to_string(), &now.to_string(), name],
+                "UPDATE transit_keys SET latest_version = ?, updated_at = ?, row_mac = ? WHERE name = ?",
+                &[&new_version.to_string(), &now.to_string(), &row_mac, name],
             )
             .await
             .map_err(|e| TransitError::Storage(e.to_string()))?;
@@ -642,14 +737,24 @@ impl TransitEngine {
             });
         }
 
+        let updated = TransitKey {
+            min_encryption_version: min_enc,
+            min_decryption_version: min_dec,
+            deletion_allowed: del,
+            updated_at: now,
+            ..key
+        };
+        let row_mac = self.policy_mac(&updated)?;
+
         self.storage
             .execute(
-                "UPDATE transit_keys SET min_encryption_version = ?, min_decryption_version = ?, deletion_allowed = ?, updated_at = ? WHERE name = ?",
+                "UPDATE transit_keys SET min_encryption_version = ?, min_decryption_version = ?, deletion_allowed = ?, updated_at = ?, row_mac = ? WHERE name = ?",
                 &[
                     &min_enc.to_string(),
                     &min_dec.to_string(),
                     &i32::from(del).to_string(),
                     &now.to_string(),
+                    &row_mac,
                     name,
                 ],
             )
@@ -864,6 +969,27 @@ mod tests {
 
         let retrieved = engine.get_key("my-key").await.unwrap();
         assert_eq!(retrieved.name, "my-key");
+    }
+
+    #[tokio::test]
+    async fn test_create_key_populates_policy_mac() {
+        let (_tmp, engine) = setup().await;
+        let key = engine.create_key("k1", KeyConfig::default()).await.unwrap();
+
+        let stored = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(row_mac, '') FROM transit_keys WHERE name = ?",
+                &["k1"],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !stored.0.is_empty(),
+            "row_mac must be populated on create_key"
+        );
+        assert_eq!(stored.0, engine.policy_mac(&key).unwrap());
     }
 
     #[tokio::test]
@@ -1705,11 +1831,16 @@ mod tests {
             let master_key2 = MasterKey::generate().unwrap(); // Different key!
             let engine2 = TransitEngine::new(tmp.path(), master_key2).await.unwrap();
 
-            // Key metadata exists but decryption should fail
-            let key = engine2.get_key("wrong-mk").await.unwrap();
-            assert_eq!(key.name, "wrong-mk");
+            // The policy-row MAC was computed under the original master key: a
+            // different master key cannot even verify the key metadata, so
+            // get_key fails closed with Integrity before any AEAD is touched.
+            let key_result = engine2.get_key("wrong-mk").await;
+            assert!(
+                matches!(key_result, Err(TransitError::Integrity(_))),
+                "wrong master key must fail closed on get_key, got {key_result:?}"
+            );
 
-            // Decryption fails because key material was encrypted with different master
+            // Decryption fails too (it routes through get_key first).
             let result = engine2.decrypt("wrong-mk", &ciphertext).await;
             assert!(result.is_err());
         }
@@ -1736,5 +1867,142 @@ mod tests {
             let decrypted = engine.decrypt("concurrent", &ct).await.unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), original);
         }
+    }
+
+    // ========================================================================
+    // Policy-Row MAC Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_lowered_min_decryption_version_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("kdec", KeyConfig::default())
+            .await
+            .unwrap();
+        engine.rotate_key("kdec").await.unwrap(); // latest = 2
+        engine
+            .update_key_config("kdec", None, Some(2), None)
+            .await
+            .unwrap();
+
+        // Tamper: lower min_decryption_version back to 1 without a valid MAC.
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET min_decryption_version = ? WHERE name = ?",
+                &["1", "kdec"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_key("kdec").await;
+        assert!(
+            matches!(result, Err(TransitError::Integrity(_))),
+            "lowered min_decryption_version must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flipped_exportable_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("kexp", KeyConfig::default())
+            .await
+            .unwrap();
+
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET exportable = 1 WHERE name = ?",
+                &["kexp"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_key("kexp").await;
+        assert!(
+            matches!(result, Err(TransitError::Integrity(_))),
+            "flipped exportable must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tampered_valid_key_type_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("ktype", KeyConfig::default())
+            .await
+            .unwrap();
+
+        // Read the current key_type, pick a different valid one, and write it
+        // without a valid MAC. The MAC (which covers key_type) must reject it.
+        let current = engine.get_key("ktype").await.unwrap();
+        let other = match current.key_type {
+            KeyType::Aes256Gcm => "chacha20-poly1305",
+            KeyType::ChaCha20Poly1305 => "aes256-gcm",
+        };
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ? WHERE name = ?",
+                &[other, "ktype"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_key("ktype").await;
+        assert!(
+            matches!(result, Err(TransitError::Integrity(_))),
+            "a tampered-but-valid key_type must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unparsable_policy_field_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("kbad", KeyConfig::default())
+            .await
+            .unwrap();
+
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET min_decryption_version = ? WHERE name = ?",
+                &["not-a-number", "kbad"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get_key("kbad").await;
+        assert!(
+            matches!(result, Err(TransitError::Integrity(_))),
+            "unparsable policy field must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_policy_mac_roundtrips_through_lifecycle() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("klife", KeyConfig::default())
+            .await
+            .unwrap();
+        assert!(engine.get_key("klife").await.is_ok());
+        engine.rotate_key("klife").await.unwrap();
+        assert_eq!(engine.get_key("klife").await.unwrap().latest_version, 2);
+        engine
+            .update_key_config("klife", None, Some(2), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine
+                .get_key("klife")
+                .await
+                .unwrap()
+                .min_decryption_version,
+            2
+        );
     }
 }
