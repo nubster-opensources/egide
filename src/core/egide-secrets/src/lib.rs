@@ -210,7 +210,8 @@ impl SecretsEngine {
         version: u32,
         deleted_at_repr: &str,
     ) -> Result<String, SecretsError> {
-        let subkey = kdf::derive_encryption_key(self.master_key.as_bytes(), SECRET_POINTER_MAC_INFO)?;
+        let subkey =
+            kdf::derive_encryption_key(self.master_key.as_bytes(), SECRET_POINTER_MAC_INFO)?;
         let data = mac::encode_fields(&[
             path.as_bytes(),
             &version.to_be_bytes(),
@@ -219,6 +220,28 @@ impl SecretsEngine {
         .map_err(SecretsError::from)?;
         let tag = mac::compute_mac(&subkey[..], &data).map_err(SecretsError::from)?;
         Ok(hex_encode(&tag))
+    }
+
+    /// Verifies the stored version-pointer MAC, failing closed on mismatch.
+    fn verify_pointer_mac(
+        &self,
+        path: &str,
+        version: u32,
+        deleted_at_repr: &str,
+        stored_hex: &str,
+    ) -> Result<(), SecretsError> {
+        let subkey =
+            kdf::derive_encryption_key(self.master_key.as_bytes(), SECRET_POINTER_MAC_INFO)?;
+        let data = mac::encode_fields(&[
+            path.as_bytes(),
+            &version.to_be_bytes(),
+            deleted_at_repr.as_bytes(),
+        ])
+        .map_err(SecretsError::from)?;
+        let stored = hex_decode(stored_hex)
+            .map_err(|e| SecretsError::Integrity(format!("invalid pointer mac encoding: {e}")))?;
+        mac::verify_mac(&subkey[..], &data, &stored)
+            .map_err(|_| SecretsError::Integrity(format!("pointer mac mismatch for {path}")))
     }
 
     /// Encrypts secret data for storage.
@@ -431,37 +454,52 @@ impl SecretsEngine {
         // Get current version from secrets table
         let row = self
             .storage
-            .query_one::<(i64, Option<i64>)>(
-                "SELECT version, deleted_at FROM secrets WHERE path = ?",
+            .query_one::<(i64, Option<i64>, String)>(
+                "SELECT version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE path = ?",
                 &[path],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?
             .ok_or_else(|| SecretsError::NotFound(path.to_string()))?;
 
-        let (version, deleted_at) = row;
+        let (version, deleted_at, row_mac) = row;
+        let version = u32::try_from(version).unwrap_or(0);
+        let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+        self.verify_pointer_mac(path, version, &deleted_at_repr, &row_mac)?;
+
         if deleted_at.is_some() {
             return Err(SecretsError::Deleted(path.to_string()));
         }
 
-        self.get_version(path, u32::try_from(version).unwrap_or(0))
-            .await
+        self.get_version(path, version).await
     }
 
     /// Retrieves a specific version of a secret.
     pub async fn get_version(&self, path: &str, version: u32) -> Result<Secret, SecretsError> {
         Self::validate_path(path)?;
 
-        // Check if secret is soft-deleted
-        let deleted = self
+        // Check the version pointer (current version, deleted_at) is intact before trusting it.
+        // The pointer MAC authenticates the CURRENT version, independent of the requested
+        // `version` argument below, which only selects the blob to fetch; that blob is
+        // separately authenticated by its own AEAD/AAD.
+        let pointer = self
             .storage
-            .query_one::<(Option<i64>,)>("SELECT deleted_at FROM secrets WHERE path = ?", &[path])
+            .query_one::<(i64, Option<i64>, String)>(
+                "SELECT version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE path = ?",
+                &[path],
+            )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
 
-        match deleted {
-            Some((Some(_),)) => return Err(SecretsError::Deleted(path.to_string())),
-            Some((None,)) => {}, // Not deleted, continue
+        match pointer {
+            Some((current_version, deleted_at, row_mac)) => {
+                let current_version = u32::try_from(current_version).unwrap_or(0);
+                let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+                self.verify_pointer_mac(path, current_version, &deleted_at_repr, &row_mac)?;
+                if deleted_at.is_some() {
+                    return Err(SecretsError::Deleted(path.to_string()));
+                }
+            },
             None => return Err(SecretsError::NotFound(path.to_string())),
         }
 
@@ -538,21 +576,23 @@ impl SecretsEngine {
 
         let row = self
             .storage
-            .query_one::<(i64, Option<i64>)>(
-                "SELECT version, deleted_at FROM secrets WHERE path = ?",
+            .query_one::<(i64, Option<i64>, String)>(
+                "SELECT version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE path = ?",
                 &[path],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?
             .ok_or_else(|| SecretsError::NotFound(path.to_string()))?;
 
-        let (version, deleted_at) = row;
+        let (version, deleted_at, stored_mac) = row;
+        let version = u32::try_from(version).unwrap_or(0);
+        let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+        self.verify_pointer_mac(path, version, &deleted_at_repr, &stored_mac)?;
         if deleted_at.is_some() {
             return Err(SecretsError::Deleted(path.to_string()));
         }
 
         let now = Self::now();
-        let version = u32::try_from(version).unwrap_or(0);
         let row_mac = self.pointer_mac(path, version, &now.to_string())?;
         self.storage
             .execute(
@@ -572,20 +612,22 @@ impl SecretsEngine {
 
         let row = self
             .storage
-            .query_one::<(i64, Option<i64>)>(
-                "SELECT version, deleted_at FROM secrets WHERE path = ?",
+            .query_one::<(i64, Option<i64>, String)>(
+                "SELECT version, deleted_at, COALESCE(row_mac, '') FROM secrets WHERE path = ?",
                 &[path],
             )
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?
             .ok_or_else(|| SecretsError::NotFound(path.to_string()))?;
 
-        let (version, deleted_at) = row;
+        let (version, deleted_at, stored_mac) = row;
+        let version = u32::try_from(version).unwrap_or(0);
+        let deleted_at_repr = deleted_at.map(|d| d.to_string()).unwrap_or_default();
+        self.verify_pointer_mac(path, version, &deleted_at_repr, &stored_mac)?;
         if deleted_at.is_none() {
             return Err(SecretsError::NotDeleted(path.to_string()));
         }
 
-        let version = u32::try_from(version).unwrap_or(0);
         let row_mac = self.pointer_mac(path, version, "")?;
         self.storage
             .execute(
@@ -834,6 +876,81 @@ mod tests {
         // The stored tag must be the MAC over (path, version=1, deleted_at="").
         let expected = engine.pointer_mac("app/p", 1, "").unwrap();
         assert_eq!(row_mac.0, expected);
+    }
+
+    #[tokio::test]
+    async fn test_rolled_back_version_pointer_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/roll", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .put("app/roll", test_data(), PutOptions::default())
+            .await
+            .unwrap(); // now v2
+
+        // Roll the pointer back to v1 without updating row_mac (storage tamper).
+        engine
+            .storage
+            .execute(
+                "UPDATE secrets SET version = ? WHERE path = ?",
+                &["1", "app/roll"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get("app/roll").await;
+        assert!(
+            matches!(result, Err(SecretsError::Integrity(_))),
+            "rolled-back version pointer must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flipped_delete_flag_fails() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/flip", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        // Forge a soft-delete without updating row_mac.
+        engine
+            .storage
+            .execute(
+                "UPDATE secrets SET deleted_at = ? WHERE path = ?",
+                &["1000", "app/flip"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.get("app/flip").await;
+        assert!(
+            matches!(result, Err(SecretsError::Integrity(_))),
+            "forged deleted_at must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pointer_mac_roundtrips_through_lifecycle() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .put("app/life", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .put("app/life", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(engine.get("app/life").await.unwrap().version, 2);
+        engine.delete("app/life").await.unwrap();
+        assert!(matches!(
+            engine.get("app/life").await,
+            Err(SecretsError::Deleted(_))
+        ));
+        engine.undelete("app/life").await.unwrap();
+        assert_eq!(engine.get("app/life").await.unwrap().version, 2);
     }
 
     #[tokio::test]
@@ -1274,8 +1391,9 @@ mod tests {
         {
             let engine2 = SecretsEngine::new(tmp.path(), "test", key2).await.unwrap();
             let result = engine2.get("shared/path").await;
-            // Should fail decryption
-            assert!(matches!(result, Err(SecretsError::Crypto(_))));
+            // The pointer MAC is keyed by the master key too, so a wrong key fails
+            // pointer verification before content decryption is ever attempted.
+            assert!(matches!(result, Err(SecretsError::Integrity(_))));
         }
 
         // Engine 1 with same key can read
