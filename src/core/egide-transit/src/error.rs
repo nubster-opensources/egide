@@ -75,6 +75,10 @@ pub enum TransitError {
     /// Cryptographic error.
     #[error("crypto error: {0}")]
     Crypto(String),
+
+    /// Authenticated policy data failed an integrity check (tampered or unparsable).
+    #[error("integrity check failed: {0}")]
+    Integrity(String),
 }
 
 impl From<egide_crypto::CryptoError> for TransitError {
