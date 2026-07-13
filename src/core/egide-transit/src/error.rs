@@ -79,6 +79,10 @@ pub enum TransitError {
     /// Authenticated policy data failed an integrity check (tampered or unparsable).
     #[error("integrity check failed: {0}")]
     Integrity(String),
+
+    /// The system clock is set before the Unix epoch.
+    #[error("system clock is before the Unix epoch")]
+    Clock,
 }
 
 impl From<egide_crypto::CryptoError> for TransitError {

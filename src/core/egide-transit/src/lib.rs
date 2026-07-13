@@ -27,7 +27,7 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use egide_crypto::{aead, kdf, mac, random, MasterKey};
 use egide_storage_sqlite::SqliteBackend;
@@ -231,16 +231,25 @@ fn hex_encode(data: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, TransitError> {
-    if !s.len().is_multiple_of(2) {
+    let bytes = s.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return Err(TransitError::Storage("invalid hex length".into()));
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&s[i..i + 2], 16)
-                .map_err(|_| TransitError::Storage("invalid hex".into()))
+    bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair)
+                .map_err(|_| TransitError::Storage("invalid hex".into()))?;
+            u8::from_str_radix(text, 16).map_err(|_| TransitError::Storage("invalid hex".into()))
         })
         .collect()
+}
+
+/// Converts a wall-clock time to whole seconds since the Unix epoch, failing closed on a clock set before 1970.
+fn unix_seconds(t: std::time::SystemTime) -> Result<u64, TransitError> {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|_| TransitError::Clock)
 }
 
 // ============================================================================
@@ -315,7 +324,7 @@ impl TransitEngine {
         version: u32,
         encrypted: &[u8],
         nonce: &[u8],
-    ) -> Result<Vec<u8>, TransitError> {
+    ) -> Result<Zeroizing<Vec<u8>>, TransitError> {
         let wrapping_key = self.derive_version_key(name, version)?;
         let aad = format!("transit-key:{name}:{version}");
 
@@ -325,11 +334,15 @@ impl TransitEngine {
         ciphertext.extend_from_slice(encrypted);
 
         let decrypted = aead::decrypt(&wrapping_key, &ciphertext, Some(aad.as_bytes()))?;
-        Ok(decrypted.to_vec())
+        Ok(decrypted)
     }
 
     /// Gets the raw key material for a specific version.
-    async fn get_key_material(&self, name: &str, version: u32) -> Result<Vec<u8>, TransitError> {
+    async fn get_key_material(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Result<Zeroizing<Vec<u8>>, TransitError> {
         let row = self
             .storage
             .query_one::<(String, String)>(
@@ -354,11 +367,8 @@ impl TransitEngine {
     // Timestamp Helper
     // ========================================================================
 
-    fn now() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
-            .as_secs()
+    fn now() -> Result<u64, TransitError> {
+        unix_seconds(std::time::SystemTime::now())
     }
 
     // ========================================================================
@@ -408,7 +418,7 @@ impl TransitEngine {
             return Err(TransitError::KeyExists(name.to_string()));
         }
 
-        let now = Self::now();
+        let now = Self::now()?;
 
         // Generate initial key material (32 bytes for AES-256 or ChaCha20)
         let raw_key = random::generate_key()?;
@@ -636,7 +646,7 @@ impl TransitEngine {
 
         let key = self.get_key(name).await?;
         let new_version = key.latest_version + 1;
-        let now = Self::now();
+        let now = Self::now()?;
 
         // Generate new key material
         let raw_key = random::generate_key()?;
@@ -717,7 +727,7 @@ impl TransitEngine {
         Self::validate_name(name)?;
 
         let key = self.get_key(name).await?;
-        let now = Self::now();
+        let now = Self::now()?;
 
         let min_enc = min_encryption_version.unwrap_or(key.min_encryption_version);
         let min_dec = min_decryption_version.unwrap_or(key.min_decryption_version);
@@ -2004,5 +2014,24 @@ mod tests {
                 .min_decryption_version,
             2
         );
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_input_without_panicking() {
+        // A 4-byte UTF-8 char (U+10340) makes a byte-index slice fall inside a code point.
+        // The old code would panic with "byte index is not a char boundary".
+        assert!(hex_decode("𐍀").is_err());
+    }
+
+    #[test]
+    fn unix_seconds_rejects_pre_epoch_time() {
+        let before = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        assert!(matches!(unix_seconds(before), Err(TransitError::Clock)));
+    }
+
+    #[test]
+    fn unix_seconds_accepts_post_epoch_time() {
+        let after = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        assert_eq!(unix_seconds(after).unwrap(), 1_000);
     }
 }
