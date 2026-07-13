@@ -653,21 +653,6 @@ impl TransitEngine {
         let (encrypted_key, nonce) =
             self.encrypt_key_material(name, new_version, raw_key.as_ref())?;
 
-        // Insert new version
-        self.storage
-            .execute(
-                "INSERT INTO transit_key_versions (name, version, key_material, nonce, created_at) VALUES (?, ?, ?, ?, ?)",
-                &[
-                    name,
-                    &new_version.to_string(),
-                    &hex_encode(&encrypted_key),
-                    &hex_encode(&nonce),
-                    &now.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| TransitError::Storage(e.to_string()))?;
-
         let updated = TransitKey {
             latest_version: new_version,
             updated_at: now,
@@ -675,12 +660,31 @@ impl TransitEngine {
         };
         let row_mac = self.policy_mac(&updated)?;
 
-        // Update latest version
+        let new_version_str = new_version.to_string();
+        let now_str = now.to_string();
+        let encrypted_key_hex = hex_encode(&encrypted_key);
+        let nonce_hex = hex_encode(&nonce);
+
+        let version_params: [&str; 5] = [
+            name,
+            &new_version_str,
+            &encrypted_key_hex,
+            &nonce_hex,
+            &now_str,
+        ];
+        let update_params: [&str; 4] = [&new_version_str, &now_str, &row_mac, name];
+
         self.storage
-            .execute(
-                "UPDATE transit_keys SET latest_version = ?, updated_at = ?, row_mac = ? WHERE name = ?",
-                &[&new_version.to_string(), &now.to_string(), &row_mac, name],
-            )
+            .execute_transaction(&[
+                (
+                    "INSERT INTO transit_key_versions (name, version, key_material, nonce, created_at) VALUES (?, ?, ?, ?, ?)",
+                    &version_params,
+                ),
+                (
+                    "UPDATE transit_keys SET latest_version = ?, updated_at = ?, row_mac = ? WHERE name = ?",
+                    &update_params,
+                ),
+            ])
             .await
             .map_err(|e| TransitError::Storage(e.to_string()))?;
 
@@ -1131,6 +1135,28 @@ mod tests {
         // Verify data unchanged
         let decrypted = engine.decrypt("rewrap-key", &ciphertext_v2).await.unwrap();
         assert_eq!(decrypted, b"data");
+    }
+
+    #[tokio::test]
+    async fn rotate_keeps_latest_in_sync_with_versions() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("sync", KeyConfig::default())
+            .await
+            .unwrap();
+
+        let v2 = engine.rotate_key("sync").await.unwrap();
+        let v3 = engine.rotate_key("sync").await.unwrap();
+        assert_eq!(v2, 2);
+        assert_eq!(v3, 3);
+
+        let key = engine.get_key("sync").await.unwrap();
+        assert_eq!(key.latest_version, 3);
+
+        let versions = engine.list_versions("sync").await.unwrap();
+        let mut numbers: Vec<u32> = versions.iter().map(|v| v.version).collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, vec![1, 2, 3]);
     }
 
     #[tokio::test]
