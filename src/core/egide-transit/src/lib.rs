@@ -440,37 +440,41 @@ impl TransitEngine {
         };
         let row_mac = self.policy_mac(&key)?;
 
-        // Insert key metadata
-        self.storage
-            .execute(
-                "INSERT INTO transit_keys (name, key_type, latest_version, min_encryption_version, min_decryption_version, supports_encryption, supports_decryption, supports_derivation, exportable, deletion_allowed, created_at, updated_at, row_mac) VALUES (?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
-                &[
-                    name,
-                    &config.key_type.to_string(),
-                    &i32::from(config.supports_encryption).to_string(),
-                    &i32::from(config.supports_decryption).to_string(),
-                    &i32::from(config.supports_derivation).to_string(),
-                    &i32::from(config.exportable).to_string(),
-                    &i32::from(config.deletion_allowed).to_string(),
-                    &now.to_string(),
-                    &now.to_string(),
-                    &row_mac,
-                ],
-            )
-            .await
-            .map_err(|e| TransitError::Storage(e.to_string()))?;
+        let key_type_str = config.key_type.to_string();
+        let supports_encryption = i32::from(config.supports_encryption).to_string();
+        let supports_decryption = i32::from(config.supports_decryption).to_string();
+        let supports_derivation = i32::from(config.supports_derivation).to_string();
+        let exportable = i32::from(config.exportable).to_string();
+        let deletion_allowed = i32::from(config.deletion_allowed).to_string();
+        let now_str = now.to_string();
+        let encrypted_key_hex = hex_encode(&encrypted_key);
+        let nonce_hex = hex_encode(&nonce);
 
-        // Insert initial key version
+        let key_params: [&str; 10] = [
+            name,
+            &key_type_str,
+            &supports_encryption,
+            &supports_decryption,
+            &supports_derivation,
+            &exportable,
+            &deletion_allowed,
+            &now_str,
+            &now_str,
+            &row_mac,
+        ];
+        let version_params: [&str; 4] = [name, &encrypted_key_hex, &nonce_hex, &now_str];
+
         self.storage
-            .execute(
-                "INSERT INTO transit_key_versions (name, version, key_material, nonce, created_at) VALUES (?, 1, ?, ?, ?)",
-                &[
-                    name,
-                    &hex_encode(&encrypted_key),
-                    &hex_encode(&nonce),
-                    &now.to_string(),
-                ],
-            )
+            .execute_transaction(&[
+                (
+                    "INSERT INTO transit_keys (name, key_type, latest_version, min_encryption_version, min_decryption_version, supports_encryption, supports_decryption, supports_derivation, exportable, deletion_allowed, created_at, updated_at, row_mac) VALUES (?, ?, 1, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    &key_params,
+                ),
+                (
+                    "INSERT INTO transit_key_versions (name, version, key_material, nonce, created_at) VALUES (?, 1, ?, ?, ?)",
+                    &version_params,
+                ),
+            ])
             .await
             .map_err(|e| TransitError::Storage(e.to_string()))?;
 
@@ -703,15 +707,11 @@ impl TransitEngine {
             return Err(TransitError::DeletionNotAllowed(name.to_string()));
         }
 
-        // Delete versions first (foreign key)
         self.storage
-            .execute("DELETE FROM transit_key_versions WHERE name = ?", &[name])
-            .await
-            .map_err(|e| TransitError::Storage(e.to_string()))?;
-
-        // Delete key
-        self.storage
-            .execute("DELETE FROM transit_keys WHERE name = ?", &[name])
+            .execute_transaction(&[
+                ("DELETE FROM transit_key_versions WHERE name = ?", &[name]),
+                ("DELETE FROM transit_keys WHERE name = ?", &[name]),
+            ])
             .await
             .map_err(|e| TransitError::Storage(e.to_string()))?;
 
@@ -968,6 +968,42 @@ mod tests {
         let master_key = MasterKey::generate().unwrap();
         let engine = TransitEngine::new(tmp.path(), master_key).await.unwrap();
         (tmp, engine)
+    }
+
+    #[tokio::test]
+    async fn create_then_duplicate_leaves_single_consistent_key() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("dup", KeyConfig::default())
+            .await
+            .unwrap();
+
+        let err = engine.create_key("dup", KeyConfig::default()).await;
+        assert!(matches!(err, Err(TransitError::KeyExists(_))));
+
+        // The original key is still whole and usable: one policy row, version 1 present.
+        let key = engine.get_key("dup").await.unwrap();
+        assert_eq!(key.latest_version, 1);
+        let versions = engine.list_versions("dup").await.unwrap();
+        assert_eq!(versions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_key_and_all_versions() {
+        let (_tmp, engine) = setup().await;
+        let config = KeyConfig {
+            deletion_allowed: true,
+            ..Default::default()
+        };
+        engine.create_key("gone", config).await.unwrap();
+        engine.rotate_key("gone").await.unwrap();
+
+        engine.delete_key("gone").await.unwrap();
+
+        assert!(matches!(
+            engine.get_key("gone").await,
+            Err(TransitError::KeyNotFound(_))
+        ));
     }
 
     #[tokio::test]
