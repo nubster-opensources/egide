@@ -196,6 +196,43 @@ impl SqliteBackend {
         Ok(())
     }
 
+    /// Executes several parameterized statements atomically in one transaction.
+    ///
+    /// All statements are committed together, or none of them are: the first
+    /// statement to fail aborts the transaction and rolls back every prior
+    /// statement in the batch. Parameters bind positionally, exactly as
+    /// [`Self::execute`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::QueryFailed`] if opening the transaction, any
+    /// statement, or the commit fails. On any error the transaction is rolled
+    /// back and the database is left unchanged.
+    pub async fn execute_transaction(
+        &self,
+        statements: &[(&str, &[&str])],
+    ) -> Result<(), StorageError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        for (sql, params) in statements {
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(*sql));
+            for param in *params {
+                query = query.bind(*param);
+            }
+            query
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        Ok(())
+    }
+
     /// Queries a single row with typed results.
     pub async fn query_one<T>(&self, sql: &str, params: &[&str]) -> Result<Option<T>, StorageError>
     where
@@ -551,5 +588,65 @@ mod tests {
             backend_b.get("shared-key").await.unwrap(),
             Some(b"value-b".to_vec())
         );
+    }
+
+    #[tokio::test]
+    async fn test_execute_transaction_commits_all_statements() {
+        let (_tmp, backend) = setup().await;
+        backend
+            .execute_raw("CREATE TABLE atomic_probe (id INTEGER PRIMARY KEY, v TEXT)")
+            .await
+            .unwrap();
+
+        backend
+            .execute_transaction(&[
+                (
+                    "INSERT INTO atomic_probe (id, v) VALUES (?, ?)",
+                    &["1", "a"],
+                ),
+                (
+                    "INSERT INTO atomic_probe (id, v) VALUES (?, ?)",
+                    &["2", "b"],
+                ),
+            ])
+            .await
+            .unwrap();
+
+        let rows: Vec<(i64, String)> = backend
+            .query_all("SELECT id, v FROM atomic_probe ORDER BY id", &[])
+            .await
+            .unwrap();
+        assert_eq!(rows, vec![(1, "a".to_string()), (2, "b".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_transaction_rolls_back_on_failure() {
+        let (_tmp, backend) = setup().await;
+        backend
+            .execute_raw("CREATE TABLE atomic_probe (id INTEGER PRIMARY KEY, v TEXT)")
+            .await
+            .unwrap();
+
+        // Second statement reuses primary key 1 -> UNIQUE violation mid-batch.
+        let result = backend
+            .execute_transaction(&[
+                (
+                    "INSERT INTO atomic_probe (id, v) VALUES (?, ?)",
+                    &["1", "a"],
+                ),
+                (
+                    "INSERT INTO atomic_probe (id, v) VALUES (?, ?)",
+                    &["1", "b"],
+                ),
+            ])
+            .await;
+        assert!(result.is_err());
+
+        // The first insert must have been rolled back: no state where stmt1 applied but stmt2 did not.
+        let count: Vec<(i64,)> = backend
+            .query_all("SELECT COUNT(*) FROM atomic_probe", &[])
+            .await
+            .unwrap();
+        assert_eq!(count[0].0, 0);
     }
 }
