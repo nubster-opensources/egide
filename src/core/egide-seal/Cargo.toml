@@ -22,7 +22,6 @@ tokio.workspace = true
 tracing.workspace = true
 blahaj.workspace = true
 argon2.workspace = true
-rand.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 subtle.workspace = true
