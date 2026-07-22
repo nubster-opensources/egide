@@ -1633,6 +1633,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rewrap_rejects_algorithm_mismatch_at_latest_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("rewrap-mismatch", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // No rotation: the ciphertext's version is already the key's latest.
+        let short = engine.encrypt("rewrap-mismatch", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let forged = format!("egide:v1:chacha20-poly1305:{body}");
+
+        let result = engine.rewrap("rewrap-mismatch", &forged).await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::CiphertextAlgorithmMismatch {
+                    expected: KeyType::Aes256Gcm,
+                    found: KeyType::ChaCha20Poly1305,
+                })
+            ),
+            "a forged ciphertext claiming another algorithm must not be returned \
+             as-is through the already-latest-version fast path, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_multiple_rotations() {
         let (_tmp, engine) = setup().await;
         engine
