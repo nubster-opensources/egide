@@ -52,12 +52,14 @@ pub fn encrypt(
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     let nonce_bytes = generate_nonce()?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    // generate_nonce returns [u8; NONCE_SIZE], so this conversion is infallible
+    // and checked at compile time.
+    let nonce = Nonce::from(nonce_bytes);
 
     let ciphertext = match associated_data {
         Some(aad) => cipher
             .encrypt(
-                nonce,
+                &nonce,
                 aes_gcm::aead::Payload {
                     msg: plaintext,
                     aad,
@@ -65,7 +67,7 @@ pub fn encrypt(
             )
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?,
         None => cipher
-            .encrypt(nonce, plaintext)
+            .encrypt(&nonce, plaintext)
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?,
     };
 
@@ -111,13 +113,17 @@ pub fn decrypt(
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
-    let nonce = Nonce::from_slice(&ciphertext[..NONCE_SIZE]);
+    // The length check above guarantees the slice holds NONCE_SIZE bytes, but the
+    // conversion is fallible on a slice, so the residual case fails closed rather
+    // than panicking on a caller supplied buffer.
+    let nonce = Nonce::try_from(&ciphertext[..NONCE_SIZE])
+        .map_err(|_| CryptoError::InvalidInput("invalid nonce length".to_string()))?;
     let encrypted = &ciphertext[NONCE_SIZE..];
 
     let plaintext = match associated_data {
         Some(aad) => cipher
             .decrypt(
-                nonce,
+                &nonce,
                 aes_gcm::aead::Payload {
                     msg: encrypted,
                     aad,
@@ -125,7 +131,7 @@ pub fn decrypt(
             )
             .map_err(|_| CryptoError::DecryptionFailed("authentication failed".to_string()))?,
         None => cipher
-            .decrypt(nonce, encrypted)
+            .decrypt(&nonce, encrypted)
             .map_err(|_| CryptoError::DecryptionFailed("authentication failed".to_string()))?,
     };
 
@@ -215,5 +221,48 @@ mod tests {
 
         let result = decrypt(&*key, &ciphertext, None);
         assert!(result.is_err());
+    }
+
+    fn from_hex(input: &str) -> Vec<u8> {
+        assert!(
+            input.len().is_multiple_of(2),
+            "hex input must have an even length"
+        );
+        (0..input.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&input[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Decrypts a known-answer vector produced outside this codebase.
+    ///
+    /// The round-trip tests above only prove that `encrypt` and `decrypt` agree
+    /// with each other, which stays true even if both drifted away from the
+    /// standard together. This vector comes from Project Wycheproof
+    /// (`testvectors_v1/aes_gcm_test.json`, tcId 100), an independent test suite
+    /// with no relation to the aes-gcm crate, so it pins the implementation to
+    /// AES-256-GCM as specified rather than to itself. It is what makes a bump of
+    /// the underlying crate observably non-breaking.
+    #[test]
+    fn test_known_answer_vector_from_external_suite() {
+        let key = from_hex("b279f57e19c8f53f2f963f5f2519fdb7c1779be2ca2b3ae8e1128b7d6c627fc4");
+        let nonce = from_hex("98bc2c7438d5cd7665d76f6e");
+        let associated_data = from_hex("c0");
+        let expected_plaintext = from_hex("fcc515b294408c8645c9183e3f4ecee5127846d1");
+        let ciphertext_body = from_hex("eb5500e3825952866d911253f8de860c00831c81");
+        let tag = from_hex("ecb660e1fb0541ec41e8d68a64141b3a");
+
+        assert_eq!(key.len(), KEY_SIZE);
+        assert_eq!(nonce.len(), NONCE_SIZE);
+        assert_eq!(tag.len(), TAG_SIZE);
+
+        // decrypt expects the wire format nonce || ciphertext || tag.
+        let mut wire = nonce;
+        wire.extend_from_slice(&ciphertext_body);
+        wire.extend_from_slice(&tag);
+
+        let plaintext = decrypt(&key, &wire, Some(&associated_data)).unwrap();
+
+        assert_eq!(&*plaintext, &expected_plaintext[..]);
     }
 }
