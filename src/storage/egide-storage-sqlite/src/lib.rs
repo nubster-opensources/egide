@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tracing::{debug, info};
 
-use egide_storage::{StorageBackend, StorageError};
+use egide_storage::{prefix_pattern, StorageBackend, StorageError};
 
 /// `SQLite` storage backend with tenant isolation.
 ///
@@ -357,13 +357,14 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let pattern = format!("{prefix}%");
+        let pattern = prefix_pattern(prefix);
 
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT key FROM kv_store WHERE key LIKE ?")
-            .bind(&pattern)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as(r"SELECT key FROM kv_store WHERE key LIKE ? ESCAPE '\'")
+                .bind(&pattern)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
         Ok(rows.into_iter().map(|(k,)| k).collect())
     }
@@ -497,6 +498,34 @@ mod tests {
         let mut keys = backend.list("").await.unwrap();
         keys.sort();
         assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_underscore_as_a_wildcard() {
+        let (_tmp, backend) = setup().await;
+
+        backend.put("prod_db", b"a").await.unwrap();
+        backend.put("prodXdb", b"b").await.unwrap();
+
+        let keys = backend.list("prod_").await.unwrap();
+
+        assert_eq!(
+            keys,
+            vec!["prod_db".to_string()],
+            "an underscore in the prefix must match literally"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_percent_as_a_wildcard() {
+        let (_tmp, backend) = setup().await;
+
+        backend.put("100%off", b"a").await.unwrap();
+        backend.put("100nope", b"b").await.unwrap();
+
+        let keys = backend.list("100%").await.unwrap();
+
+        assert_eq!(keys, vec!["100%off".to_string()]);
     }
 
     #[tokio::test]

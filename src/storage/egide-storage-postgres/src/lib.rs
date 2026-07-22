@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::{debug, info};
 
-use egide_storage::{StorageBackend, StorageError};
+use egide_storage::{prefix_pattern, StorageBackend, StorageError};
 
 /// `PostgreSQL` storage backend with schema-per-tenant isolation.
 ///
@@ -294,9 +294,9 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let pattern = format!("{prefix}%");
+        let pattern = prefix_pattern(prefix);
         let sql = format!(
-            "SELECT key FROM \"{}\".kv_store WHERE key LIKE $1",
+            r#"SELECT key FROM "{}".kv_store WHERE key LIKE $1 ESCAPE '\'"#,
             self.tenant
         );
 
@@ -504,6 +504,34 @@ mod tests {
         let mut keys = backend.list("").await.unwrap();
         keys.sort();
         assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_underscore_as_a_wildcard() {
+        let (_node, backend) = setup().await;
+
+        backend.put("prod_db", b"a").await.unwrap();
+        backend.put("prodXdb", b"b").await.unwrap();
+
+        let keys = backend.list("prod_").await.unwrap();
+
+        assert_eq!(
+            keys,
+            vec!["prod_db".to_string()],
+            "an underscore in the prefix must match literally"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_percent_as_a_wildcard() {
+        let (_node, backend) = setup().await;
+
+        backend.put("100%off", b"a").await.unwrap();
+        backend.put("100nope", b"b").await.unwrap();
+
+        let keys = backend.list("100%").await.unwrap();
+
+        assert_eq!(keys, vec!["100%off".to_string()]);
     }
 
     #[tokio::test]
