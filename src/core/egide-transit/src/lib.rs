@@ -407,6 +407,13 @@ impl TransitEngine {
     ) -> Result<TransitKey, TransitError> {
         Self::validate_name(name)?;
 
+        // Only AES-256-GCM is implemented. Accepting another key type would
+        // silently encrypt under AES-256-GCM anyway, so fail closed here
+        // rather than persist a promise the engine cannot keep.
+        if config.key_type != KeyType::Aes256Gcm {
+            return Err(TransitError::UnsupportedKeyType(config.key_type));
+        }
+
         // Check if key already exists
         let existing = self
             .storage
@@ -1019,6 +1026,29 @@ mod tests {
 
         let retrieved = engine.get_key("my-key").await.unwrap();
         assert_eq!(retrieved.name, "my-key");
+    }
+
+    #[tokio::test]
+    async fn test_create_key_rejects_unimplemented_key_type() {
+        let (_tmp, engine) = setup().await;
+
+        let config = KeyConfig {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..KeyConfig::default()
+        };
+        let result = engine.create_key("unsupported", config).await;
+
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::UnsupportedKeyType(KeyType::ChaCha20Poly1305))
+            ),
+            "an unimplemented key type must be rejected, got {result:?}"
+        );
+
+        // The rejection must happen before any row is written.
+        let lookup = engine.get_key("unsupported").await;
+        assert!(matches!(lookup, Err(TransitError::KeyNotFound(_))));
     }
 
     #[tokio::test]

@@ -60,6 +60,10 @@ pub enum TransitError {
     #[error("invalid key type: {0}")]
     InvalidKeyType(String),
 
+    /// Key type accepted by the API but not implemented by this build.
+    #[error("unsupported key type: {0}")]
+    UnsupportedKeyType(crate::KeyType),
+
     /// Key is not exportable.
     #[error("key is not exportable: {0}")]
     NotExportable(String),

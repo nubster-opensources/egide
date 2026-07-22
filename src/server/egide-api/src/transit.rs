@@ -25,8 +25,9 @@ use crate::{ServiceContext, ServiceError};
 /// |-------------------------------------------------------------|---------------------------|
 /// | `KeyNotFound` / `VersionNotFound`                           | `NotFound`                |
 /// | `KeyExists`                                                 | `Conflict`                |
-/// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` / | `BadRequest`              |
-/// | `VersionBelowMinEncryption` / `VersionBelowMinDecryption`   |                           |
+/// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` /  | `BadRequest`              |
+/// | `UnsupportedKeyType` / `VersionBelowMinEncryption` /         |                           |
+/// | `VersionBelowMinDecryption`                                 |                           |
 /// | `DecryptionFailed`                                          | `DecryptionFailed`        |
 /// | `OperationNotAllowed` / `NotExportable` / `DeletionNotAllowed` | `Forbidden`            |
 /// | `Storage` / `Crypto` / `Integrity` / `Clock`                | `Internal`                |
@@ -41,6 +42,9 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         },
         TransitError::InvalidKeyName(msg) | TransitError::InvalidKeyType(msg) => {
             ServiceError::BadRequest(msg)
+        },
+        TransitError::UnsupportedKeyType(key_type) => {
+            ServiceError::BadRequest(format!("unsupported key type: {key_type}"))
         },
         TransitError::VersionBelowMinEncryption { version, min } => ServiceError::BadRequest(
             format!("key version {version} is below min_encryption_version {min}"),
@@ -425,20 +429,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypt_decrypt_chacha20() {
+    async fn create_key_chacha20_is_rejected_as_unsupported() {
+        // ChaCha20-Poly1305 is accepted by the wire format but not implemented
+        // by the engine: creation must fail closed instead of silently
+        // encrypting under AES-256-GCM.
         let (_t, c) = crate::test_support::unsealed_context().await;
-        c.create_key(
-            &AuthContext::root(),
-            "chacha-key",
-            "chacha20-poly1305",
-            false,
-        )
-        .await
-        .unwrap();
-        let plaintext = b"chacha20 secret data";
-        let ct = c.encrypt("chacha-key", plaintext).await.unwrap();
-        let recovered = c.decrypt("chacha-key", &ct).await.unwrap();
-        assert_eq!(recovered, plaintext);
+        let err = c
+            .create_key(
+                &AuthContext::root(),
+                "chacha-key",
+                "chacha20-poly1305",
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::ServiceError::BadRequest(_)),
+            "expected BadRequest for unsupported key type, got {err:?}"
+        );
     }
 
     #[tokio::test]
