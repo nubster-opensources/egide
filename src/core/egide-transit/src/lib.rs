@@ -11,9 +11,12 @@
 //!
 //! ## Ciphertext Format
 //!
-//! Ciphertexts are encoded as: `egide:v{version}:{base64_ciphertext}`
-//!
-//! This allows the engine to determine which key version to use for decryption.
+//! Ciphertexts are encoded as `egide:v{version}:{base64}` for AES-256-GCM,
+//! and as `egide:v{version}:{algorithm}:{base64}` for any other algorithm.
+//! The short form is normatively AES-256-GCM: it predates algorithm
+//! labelling and is kept readable so ciphertexts written by earlier releases
+//! stay decryptable. Both forms are accepted on decryption; only the short
+//! form is currently emitted.
 
 #![forbid(unsafe_code)]
 
@@ -843,9 +846,7 @@ impl TransitEngine {
         let aad = format!("egide-transit:{name}:{version}");
         let ciphertext = aead::encrypt(&raw_key, plaintext, Some(aad.as_bytes()))?;
 
-        // Format: egide:v{version}:{base64}
-        let encoded = BASE64.encode(&ciphertext);
-        Ok(format!("egide:v{version}:{encoded}"))
+        Ok(Self::format_ciphertext(version, key.key_type, &ciphertext))
     }
 
     /// Decrypts ciphertext.
@@ -860,8 +861,18 @@ impl TransitEngine {
             ));
         }
 
-        // Parse ciphertext format: egide:v{version}:{base64}
-        let (version, data) = Self::parse_ciphertext(ciphertext)?;
+        // Parse ciphertext format: egide:v{version}:{base64} (or the explicit
+        // egide:v{version}:{algorithm}:{base64} form).
+        let (version, ciphertext_key_type, data) = Self::parse_ciphertext(ciphertext)?;
+
+        // A ciphertext claiming an algorithm other than the key's would be
+        // decrypted under the wrong cipher. Refuse rather than guess.
+        if ciphertext_key_type != key.key_type {
+            return Err(TransitError::CiphertextAlgorithmMismatch {
+                expected: key.key_type,
+                found: ciphertext_key_type,
+            });
+        }
 
         if version < key.min_decryption_version {
             return Err(TransitError::VersionBelowMinDecryption {
@@ -880,11 +891,28 @@ impl TransitEngine {
         Ok(decrypted.to_vec())
     }
 
-    /// Parses the ciphertext format and extracts version and raw data.
-    fn parse_ciphertext(ciphertext: &str) -> Result<(u32, Vec<u8>), TransitError> {
-        let parts: Vec<&str> = ciphertext.splitn(3, ':').collect();
+    /// Formats a ciphertext envelope.
+    ///
+    /// AES-256-GCM keeps the historical short form `egide:v{n}:{b64}`, which
+    /// is normatively defined as AES-256-GCM. Any other algorithm uses the
+    /// explicit form `egide:v{n}:{alg}:{b64}` so the ciphertext is never
+    /// ambiguous.
+    fn format_ciphertext(version: u32, key_type: KeyType, data: &[u8]) -> String {
+        let encoded = BASE64.encode(data);
+        match key_type {
+            KeyType::Aes256Gcm => format!("egide:v{version}:{encoded}"),
+            other @ KeyType::ChaCha20Poly1305 => format!("egide:v{version}:{other}:{encoded}"),
+        }
+    }
 
-        if parts.len() != 3 || parts[0] != "egide" {
+    /// Parses a ciphertext envelope in either the short or the explicit form.
+    ///
+    /// The short form omits the algorithm and means AES-256-GCM. The base64
+    /// alphabet excludes `:`, so counting the segments is unambiguous.
+    fn parse_ciphertext(ciphertext: &str) -> Result<(u32, KeyType, Vec<u8>), TransitError> {
+        let parts: Vec<&str> = ciphertext.splitn(4, ':').collect();
+
+        if parts.len() < 3 || parts[0] != "egide" {
             return Err(TransitError::InvalidCiphertext);
         }
 
@@ -895,11 +923,17 @@ impl TransitEngine {
             .parse()
             .map_err(|_| TransitError::InvalidCiphertext)?;
 
+        let (key_type, encoded) = if parts.len() == 3 {
+            (KeyType::Aes256Gcm, parts[2])
+        } else {
+            (parts[2].parse::<KeyType>()?, parts[3])
+        };
+
         let data = BASE64
-            .decode(parts[2])
+            .decode(encoded)
             .map_err(|_| TransitError::InvalidCiphertext)?;
 
-        Ok((version, data))
+        Ok((version, key_type, data))
     }
 
     /// Rewraps ciphertext with the latest key version.
@@ -909,7 +943,17 @@ impl TransitEngine {
         let key = self.get_key(name).await?;
 
         // Parse to get current version
-        let (current_version, _) = Self::parse_ciphertext(ciphertext)?;
+        let (current_version, ciphertext_key_type, _data) = Self::parse_ciphertext(ciphertext)?;
+
+        // A ciphertext claiming an algorithm other than the key's would be
+        // decrypted under the wrong cipher. Refuse rather than guess, even on
+        // the already-latest-version fast path below that never calls decrypt.
+        if ciphertext_key_type != key.key_type {
+            return Err(TransitError::CiphertextAlgorithmMismatch {
+                expected: key.key_type,
+                found: ciphertext_key_type,
+            });
+        }
 
         // If already at latest version, return as-is
         if current_version == key.latest_version {
@@ -2106,6 +2150,80 @@ mod tests {
                 .min_decryption_version,
             2
         );
+    }
+
+    #[tokio::test]
+    async fn test_short_form_ciphertext_stays_decryptable() {
+        let (_tmp, engine) = setup().await;
+        engine.create_key("legacy", KeyConfig::new()).await.unwrap();
+
+        // The short form is what v0.1.0 produced. It must keep round-tripping.
+        let ciphertext = engine.encrypt("legacy", b"payload").await.unwrap();
+        assert!(
+            ciphertext.starts_with("egide:v1:"),
+            "AES-256-GCM must keep emitting the short form, got {ciphertext}"
+        );
+        assert_eq!(
+            ciphertext.matches(':').count(),
+            2,
+            "the short form carries exactly two separators"
+        );
+
+        let plaintext = engine.decrypt("legacy", &ciphertext).await.unwrap();
+        assert_eq!(plaintext, b"payload");
+    }
+
+    #[tokio::test]
+    async fn test_long_form_ciphertext_is_accepted() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("explicit", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let short = engine.encrypt("explicit", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let long = format!("egide:v1:aes256-gcm:{body}");
+
+        let plaintext = engine.decrypt("explicit", &long).await.unwrap();
+        assert_eq!(plaintext, b"payload");
+    }
+
+    #[tokio::test]
+    async fn test_ciphertext_algorithm_mismatch_fails_closed() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("mismatch", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let short = engine.encrypt("mismatch", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let forged = format!("egide:v1:chacha20-poly1305:{body}");
+
+        let result = engine.decrypt("mismatch", &forged).await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::CiphertextAlgorithmMismatch {
+                    expected: KeyType::Aes256Gcm,
+                    found: KeyType::ChaCha20Poly1305,
+                })
+            ),
+            "a ciphertext claiming another algorithm must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unknown_algorithm_label_is_rejected() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("unknown-alg", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let result = engine.decrypt("unknown-alg", "egide:v1:rot13:AAAA").await;
+        assert!(matches!(result, Err(TransitError::InvalidKeyType(_))));
     }
 
     #[test]

@@ -64,6 +64,15 @@ pub enum TransitError {
     #[error("unsupported key type: {0}")]
     UnsupportedKeyType(crate::KeyType),
 
+    /// Ciphertext declares an algorithm the key does not use.
+    #[error("ciphertext algorithm {found} does not match key algorithm {expected}")]
+    CiphertextAlgorithmMismatch {
+        /// Algorithm the key is configured with.
+        expected: crate::KeyType,
+        /// Algorithm declared by the ciphertext.
+        found: crate::KeyType,
+    },
+
     /// Key is not exportable.
     #[error("key is not exportable: {0}")]
     NotExportable(String),

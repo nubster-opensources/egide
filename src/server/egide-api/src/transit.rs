@@ -27,7 +27,7 @@ use crate::{ServiceContext, ServiceError};
 /// | `KeyExists`                                                 | `Conflict`                |
 /// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` /  | `BadRequest`              |
 /// | `UnsupportedKeyType` / `VersionBelowMinEncryption` /         |                           |
-/// | `VersionBelowMinDecryption`                                 |                           |
+/// | `VersionBelowMinDecryption` / `CiphertextAlgorithmMismatch`  |                           |
 /// | `DecryptionFailed`                                          | `DecryptionFailed`        |
 /// | `OperationNotAllowed` / `NotExportable` / `DeletionNotAllowed` | `Forbidden`            |
 /// | `Storage` / `Crypto` / `Integrity` / `Clock`                | `Internal`                |
@@ -51,6 +51,9 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         ),
         TransitError::VersionBelowMinDecryption { version, min } => ServiceError::BadRequest(
             format!("key version {version} is below min_decryption_version {min}"),
+        ),
+        TransitError::CiphertextAlgorithmMismatch { expected, found } => ServiceError::BadRequest(
+            format!("ciphertext algorithm {found} does not match key algorithm {expected}"),
         ),
         TransitError::DecryptionFailed => ServiceError::DecryptionFailed,
         TransitError::OperationNotAllowed(msg)
