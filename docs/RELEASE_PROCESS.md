@@ -101,6 +101,10 @@ This process is already wired up via:
 - `.github/workflows/bump.yml` - triggers `scripts/release.sh`
 - `.github/workflows/release.yml` - fires on `v*` tags, publishes to crates.io and creates the GitHub Release
 - `scripts/release.sh` - the release prep script
-- `scripts/cargo-publish-idempotent.sh` - idempotent `cargo publish` wrapper used for local or ad hoc publishing
 
 The `CARGO_REGISTRY_TOKEN` secret must be present, scoped to the `crates-io` deployment environment used by the release workflow.
+
+There is deliberately no script to publish from a workstation. Publishing has a
+single entry point, the release workflow above, so that the crates.io credentials
+never leave the `crates-io` deployment environment and every published version is
+traceable to a reviewed tag.
