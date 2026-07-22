@@ -33,7 +33,7 @@ The script:
 2. Computes the target version.
 3. Creates a `release/vX.Y.Z-prep` branch.
 4. Graduates `CHANGELOG.md`.
-5. Runs `cargo release` to bump all `Cargo.toml` files.
+5. Runs `cargo release` to bump all `Cargo.toml` files, with publishing, tagging and pushing disabled.
 6. Runs pre-flight checks (fmt, clippy, tests).
 7. Pushes the branch and opens a PR via `gh`.
 
@@ -46,6 +46,12 @@ cargo release patch --workspace --execute --no-confirm
 ```
 
 You will need to graduate the CHANGELOG manually and open the PR yourself.
+
+This command only rewrites version numbers because `release.toml` sets `publish`,
+`tag` and `push` to `false` for the whole workspace. All three default to `true`
+in cargo-release: without that file the command above would publish every crate
+to crates.io, create the tag and push it, which cannot be undone. Do not remove
+`release.toml`, and do not re-enable those settings on the command line.
 
 ## Tagging
 
@@ -67,6 +73,13 @@ Pushing the tag fires `.github/workflows/release.yml`, which:
 - It does not push the tag (intentional: lets the maintainer review the PR first).
 - It does not publish to crates.io (that is the release workflow's job, triggered by the tag).
 - It does not create a GitHub Release directly.
+
+These three properties are enforced, not merely intended. `release.toml` disables
+`publish`, `tag` and `push` for every crate in the workspace, and `scripts/release.sh`
+repeats `--no-publish --no-tag --no-push` on its `cargo release` call because command
+line arguments take precedence over the file. Publishing has exactly one entry point:
+`.github/workflows/release.yml`, fired by an annotated `v*` tag, holding the crates.io
+credentials in the `crates-io` deployment environment.
 
 ## Failure modes
 

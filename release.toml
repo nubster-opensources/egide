@@ -1,0 +1,24 @@
+# cargo-release configuration for the Egide workspace.
+#
+# Workspace-level settings are inherited implicitly by every member crate
+# (cargo-release does not use Cargo's explicit workspace inheritance).
+#
+# Egide never publishes from a developer workstation or from the bump
+# workflow. Releasing is a two-stage process:
+#
+#   1. scripts/release.sh only PREPARES a release: it bumps versions,
+#      graduates the changelog and opens a pull request. Nothing leaves
+#      the machine except the preparation branch.
+#   2. Publishing happens exclusively in .github/workflows/release.yml,
+#      triggered by an annotated v* tag pushed by a human after that pull
+#      request is reviewed and merged. That workflow owns the crates.io
+#      credentials through the `crates-io` deployment environment and
+#      handles the crates.io rate limit on new crates.
+#
+# The three settings below enforce stage 1. Every one of them defaults to
+# `true` in cargo-release, so omitting this file would make a single
+# `cargo release --execute` publish all crates to crates.io, tag, and push,
+# which is irreversible.
+publish = false
+tag = false
+push = false

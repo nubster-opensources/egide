@@ -46,6 +46,20 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
+# 0. Tooling pre-flight. These are checked before anything mutates the
+#    repository: a missing tool discovered at step 6 would leave behind a
+#    preparation branch and a dangling changelog commit to clean up by hand.
+MISSING_TOOLS=()
+for tool in git cargo python3 gh; do
+  command -v "${tool}" >/dev/null 2>&1 || MISSING_TOOLS+=("${tool}")
+done
+cargo release --version >/dev/null 2>&1 || MISSING_TOOLS+=("cargo-release")
+if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
+  echo "error: missing required tooling: ${MISSING_TOOLS[*]}" >&2
+  echo "hint: cargo-release is installed with 'cargo install --locked cargo-release'" >&2
+  exit 1
+fi
+
 # 1. Pre-flight
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "${CURRENT_BRANCH}" != "main" ]]; then
@@ -151,8 +165,15 @@ PYEOF
 git add CHANGELOG.md
 git commit -m "chore: graduate changelog for v${NEW_VERSION}"
 
-# 6. Bump every Cargo.toml version (including inter-crate path deps)
-cargo release "${LEVEL}" --workspace --execute --no-confirm
+# 6. Bump every Cargo.toml version (including inter-crate path deps).
+#    publish, tag and push all default to true in cargo-release, which would
+#    make this call publish the whole workspace to crates.io before the
+#    quality gate below has even run. release.toml already disables the three
+#    of them for every crate; they are repeated here because command line
+#    arguments take precedence over the file, so this call is safe even if
+#    release.toml is edited, moved or shadowed by a per-crate override.
+cargo release "${LEVEL}" --workspace --execute --no-confirm \
+  --no-publish --no-tag --no-push
 
 # 7. Pre-flight checks
 echo "Running cargo fmt --check"
