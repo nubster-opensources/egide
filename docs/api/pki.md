@@ -2,7 +2,7 @@
 
 > **Status: planned for 0.4.0, not implemented yet.** This page describes the target design. The `egide-pki` crate currently ships as a placeholder and no `/v1/pki/*` endpoint is served.
 
-The PKI API provides endpoints for certificate management.
+The PKI API will provide endpoints for certificate management.
 
 ## Generate Root CA
 

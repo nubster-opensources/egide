@@ -301,7 +301,7 @@ impl SealManager {
         self.status = SealStatus::Sealed;
         self.threshold = config.threshold;
 
-        info!("Vault initialized successfully");
+        info!("Egide initialized successfully");
 
         Ok(InitResult {
             root_token: root_token.as_str().to_owned(),
@@ -391,7 +391,7 @@ impl SealManager {
         self.master_key = Some(master_key);
         self.status = SealStatus::Unsealed;
 
-        info!("Vault unsealed successfully");
+        info!("Egide unsealed successfully");
 
         Ok(())
     }
@@ -408,7 +408,7 @@ impl SealManager {
         self.pending_indices.clear();
         self.status = SealStatus::Sealed;
 
-        info!("Vault sealed");
+        info!("Egide sealed");
     }
 
     /// Returns the master key (only if unsealed).

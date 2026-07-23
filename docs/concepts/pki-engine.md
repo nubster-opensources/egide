@@ -2,11 +2,11 @@
 
 > **Status: planned for 0.4.0, not implemented yet.** This page describes the target design. The `egide-pki` crate currently ships as a placeholder and no `/v1/pki/*` endpoint is served.
 
-The PKI (Public Key Infrastructure) Engine provides an internal Certificate Authority for managing TLS/mTLS certificates.
+The PKI (Public Key Infrastructure) Engine will provide an internal Certificate Authority for managing TLS/mTLS certificates.
 
 ## Overview
 
-The PKI Engine enables you to:
+The PKI Engine will enable you to:
 
 - **Create Certificate Authorities**: Root and Intermediate CAs
 - **Issue Certificates**: TLS server, client, and code signing certificates

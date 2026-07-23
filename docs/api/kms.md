@@ -2,7 +2,7 @@
 
 > **Status: planned for 0.3.0, not implemented yet.** This page describes the target design. The `egide-kms` crate currently ships as a placeholder and no `/v1/kms/*` endpoint is served.
 
-The KMS API provides endpoints for key management and cryptographic operations.
+The KMS API will provide endpoints for key management and cryptographic operations.
 
 ## Create Key
 

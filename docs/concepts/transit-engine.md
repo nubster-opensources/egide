@@ -228,6 +228,20 @@ logs-encryption-key        → Sensitive logs
 3. Rewrap stored ciphertext one at a time with `POST /v1/transit/rewrap/<key>`
 4. Monitor for old version usage
 
+#### Message limit per key version
+
+Egide encrypts each message under AES-256-GCM with a fresh random 96-bit nonce.
+With random nonces the limiting factor is nonce collision, not key strength:
+after about `2^32` (roughly 4.3 billion) encryptions under a single key version,
+the probability that two messages reuse a nonce reaches the `2^-32` threshold
+recommended by NIST SP 800-38D. A nonce collision in GCM breaks both
+confidentiality and authenticity, so treat `2^32` messages as a hard ceiling per
+key version.
+
+Each rotation creates a new key version with a fresh key, which resets the count.
+For a high-throughput key, schedule rotation by message volume (well before
+`2^32` per version), not only by calendar time.
+
 ### Context for Multi-Tenancy
 
 > **Status: planned, not implemented yet.** Key-derivation `context` is not implemented; use a separate named key per tenant instead.
