@@ -3,7 +3,10 @@
 //! A bound parameter protects against SQL injection but not against pattern
 //! injection: `LIKE` still interprets `%` and `_` inside the bound value.
 //! Callers building a pattern from user input must escape it here so both
-//! backends behave identically.
+//! backends escape metacharacters identically. This does not make the two
+//! backends match identically: `SQLite`'s `LIKE` is ASCII case-insensitive
+//! while `Postgres`'s is case-sensitive, so the same escaped pattern can
+//! still return different result sets across backends.
 
 /// Escape character paired with every `LIKE ... ESCAPE` clause.
 pub const LIKE_ESCAPE_CHAR: char = '\\';
@@ -53,6 +56,16 @@ mod tests {
         // Escaping the escape first is what keeps the mapping injective.
         assert_eq!(escape_like_pattern(r"a\b"), r"a\\b");
         assert_eq!(escape_like_pattern(r"a\_b"), r"a\\\_b");
+    }
+
+    #[test]
+    fn test_empty_literal_is_unchanged() {
+        assert_eq!(escape_like_pattern(""), "");
+    }
+
+    #[test]
+    fn test_literal_made_entirely_of_metacharacters_stays_injective() {
+        assert_eq!(escape_like_pattern(r"%_\"), r"\%\_\\");
     }
 
     #[test]

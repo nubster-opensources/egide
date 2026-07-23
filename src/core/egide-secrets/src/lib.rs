@@ -42,6 +42,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use egide_crypto::{aead, kdf, mac, MasterKey};
+use egide_storage::prefix_pattern;
 use egide_storage_sqlite::SqliteBackend;
 
 pub use error::SecretsError;
@@ -659,11 +660,11 @@ impl SecretsEngine {
 
     /// Lists secrets matching a prefix.
     pub async fn list(&self, prefix: &str) -> Result<Vec<SecretMetadata>, SecretsError> {
-        let pattern = format!("{prefix}%");
+        let pattern = prefix_pattern(prefix);
         let rows = self
             .storage
             .query_all::<(String, String, String, String, String)>(
-                "SELECT path, CAST(version AS TEXT), CAST(created_at AS TEXT), CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM secrets WHERE path LIKE ? ORDER BY path",
+                "SELECT path, CAST(version AS TEXT), CAST(created_at AS TEXT), CAST(updated_at AS TEXT), COALESCE(CAST(deleted_at AS TEXT), '') FROM secrets WHERE path LIKE ? ESCAPE '\\' ORDER BY path",
                 &[&pattern],
             )
             .await
@@ -1340,6 +1341,50 @@ mod tests {
 
         let db_list = engine.list("myapp/db/").await.unwrap();
         assert_eq!(db_list.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_underscore_as_a_wildcard() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("prod_db/password", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .put("prodXdb/password", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        let list = engine.list("prod_db/").await.unwrap();
+
+        assert_eq!(
+            list.len(),
+            1,
+            "an underscore in the prefix must match literally"
+        );
+        assert_eq!(list[0].path, "prod_db/password");
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_percent_as_a_wildcard() {
+        let (_tmp, engine) = setup().await;
+
+        engine
+            .put("prod/db", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+        engine
+            .put("prodextra/db", test_data(), PutOptions::default())
+            .await
+            .unwrap();
+
+        let list = engine.list("prod%").await.unwrap();
+
+        assert!(
+            list.is_empty(),
+            "a percent sign in the prefix must match literally"
+        );
     }
 
     #[tokio::test]
