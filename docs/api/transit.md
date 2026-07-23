@@ -27,7 +27,7 @@ POST /v1/transit/keys
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `name` | string | Key name (required) |
-| `type` | string | `aes256-gcm` (default) or `chacha20-poly1305` |
+| `type` | string | `aes256-gcm` (default; the only type implemented) |
 | `deletion_allowed` | boolean | Whether the key may later be deleted (default: false) |
 
 ### Response

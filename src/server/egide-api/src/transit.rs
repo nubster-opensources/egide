@@ -31,6 +31,7 @@ use crate::{ServiceContext, ServiceError};
 /// | `DecryptionFailed`                                          | `DecryptionFailed`        |
 /// | `OperationNotAllowed` / `NotExportable` / `DeletionNotAllowed` | `Forbidden`            |
 /// | `Storage` / `Crypto` / `Integrity` / `Clock`                | `Internal`                |
+/// | any future variant (the enum is `#[non_exhaustive]`)        | `Internal`                |
 fn map_transit_error(err: TransitError) -> ServiceError {
     match err {
         TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
@@ -63,6 +64,10 @@ fn map_transit_error(err: TransitError) -> ServiceError {
             ServiceError::Internal(msg)
         },
         TransitError::Clock => ServiceError::Internal("transit clock error".into()),
+        // TransitError is #[non_exhaustive]: a future patch release may add a
+        // variant without a major version bump. Fail closed to Internal
+        // rather than fail to compile.
+        _ => ServiceError::Internal("unrecognized transit error".into()),
     }
 }
 

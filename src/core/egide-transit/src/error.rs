@@ -3,7 +3,13 @@
 use thiserror::Error;
 
 /// Errors that can occur in the Transit Engine.
+///
+/// Marked `#[non_exhaustive]`: this crate is published, and a future patch
+/// may need to add a variant (for example a new security-relevant failure
+/// mode) without forcing a major version bump on every downstream consumer
+/// that matches on this enum.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransitError {
     /// Key not found.
     #[error("key not found: {0}")]

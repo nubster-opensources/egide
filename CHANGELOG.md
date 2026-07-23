@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Transit: `create_key` refuses `chacha20-poly1305` at creation time. That
+  type was accepted since 0.1.0 but never actually implemented: keys created
+  with it were always encrypted under AES-256-GCM regardless. Accepting it
+  produced a policy row and ciphertext labels no client could trust.
+- `TransitError` is now `#[non_exhaustive]`. This is a source break for any
+  consumer matching on it exhaustively (a wildcard arm is now required); it
+  buys the room to add a variant in a future patch release instead of
+  forcing a major version bump.
+
+### Fixed
+- Transit: `decrypt` and `rewrap` now check a ciphertext's algorithm against
+  the engine's actual implemented algorithm (AES-256-GCM), not against the
+  key's declared `key_type`. A key created in 0.1.0 with the declared type
+  `chacha20-poly1305` was always encrypted under AES-256-GCM in practice;
+  previously such a key's ciphertexts were rejected with
+  `CiphertextAlgorithmMismatch` even though they were physically
+  decryptable, making that data permanently inaccessible. `encrypt` now
+  refuses to run on such a key (`TransitError::UnsupportedKeyType`) instead
+  of emitting a ciphertext mislabelled with an algorithm it was not actually
+  encrypted under.
+
+### Upgrade Notes
+- A transit key declared `chacha20-poly1305` under 0.1.0 remains readable:
+  `decrypt` and `rewrap` keep working on its existing ciphertexts. It no
+  longer accepts new encryption (`encrypt` returns
+  `TransitError::UnsupportedKeyType`) and should be replaced with a new key
+  using the default `aes256-gcm` type.
+
 ## [0.1.0] - 2026-07-08
 
 First public release. Egide provides a self-hosted Secrets Manager and Transit
