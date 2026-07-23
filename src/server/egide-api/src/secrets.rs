@@ -46,8 +46,8 @@ impl ServiceContext {
     ///
     /// Returns the new version number. When `cas` is `Some(n)`, the write only
     /// succeeds if the current version equals `n`; a mismatch yields
-    /// [`ServiceError::Conflict`] (HTTP 409). Passing `None` performs an
-    /// unconditional write.
+    /// [`ServiceError::Conflict`] (HTTP 409) with a detail explaining the
+    /// version mismatch. Passing `None` performs an unconditional write.
     ///
     /// Returns [`ServiceError::Sealed`] if the vault is sealed.
     /// Returns [`ServiceError::BadRequest`] if the path is invalid.
@@ -102,7 +102,9 @@ impl ServiceContext {
 /// | everything else        | `Internal`            | 500  |
 fn map_put_error(e: SecretsError) -> ServiceError {
     match e {
-        SecretsError::VersionMismatch { .. } => ServiceError::Conflict,
+        SecretsError::VersionMismatch { .. } => ServiceError::Conflict(
+            "version mismatch: the current version differs from the one provided".into(),
+        ),
         SecretsError::InvalidPath(msg) => ServiceError::BadRequest(msg),
         other => ServiceError::Internal(other.to_string()),
     }
@@ -199,7 +201,7 @@ mod tests {
         // cas: Some(0) is stale (current version is 1), must yield Conflict.
         let err = c.secret_put("cas/stale", data2, Some(0)).await.unwrap_err();
         assert!(
-            matches!(err, crate::ServiceError::Conflict),
+            matches!(err, crate::ServiceError::Conflict(_)),
             "expected Conflict, got {err:?}"
         );
     }

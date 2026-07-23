@@ -407,7 +407,7 @@ pub async fn secrets_put_handler(
         .map_err(|e| {
             use egide_api::ServiceError as E;
             let status = match &e {
-                E::Conflict => StatusCode::CONFLICT,
+                E::Conflict(_) => StatusCode::CONFLICT,
                 E::BadRequest(_) => StatusCode::BAD_REQUEST,
                 E::Sealed => StatusCode::SERVICE_UNAVAILABLE,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,

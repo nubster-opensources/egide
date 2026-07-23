@@ -24,7 +24,8 @@ use crate::{ServiceContext, ServiceError};
 /// | `TransitError`                                              | `ServiceError`            |
 /// |-------------------------------------------------------------|---------------------------|
 /// | `KeyNotFound` / `VersionNotFound`                           | `NotFound`                |
-/// | `KeyExists` / `KeyAlgorithmNotImplemented`                  | `Conflict`                |
+/// | `KeyExists`                                                  | `Conflict("key already exists")` |
+/// | `KeyAlgorithmNotImplemented`                                | `Conflict("key declares an algorithm this build does not implement")` |
 /// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` /  | `BadRequest`              |
 /// | `UnsupportedKeyType` / `VersionBelowMinEncryption` /         |                           |
 /// | `VersionBelowMinDecryption` / `CiphertextAlgorithmMismatch`  |                           |
@@ -37,8 +38,9 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
             ServiceError::NotFound
         },
-        TransitError::KeyExists(_) | TransitError::KeyAlgorithmNotImplemented(_) => {
-            ServiceError::Conflict
+        TransitError::KeyExists(_) => ServiceError::Conflict("key already exists".into()),
+        TransitError::KeyAlgorithmNotImplemented(_) => {
+            ServiceError::Conflict("key declares an algorithm this build does not implement".into())
         },
         TransitError::InvalidCiphertext => {
             ServiceError::BadRequest("invalid ciphertext format".into())
@@ -97,7 +99,8 @@ impl ServiceContext {
     ///
     /// Authorization: root-only. Returns [`ServiceError::Forbidden`] for non-root callers.
     /// Returns [`ServiceError::Sealed`] if the vault is sealed.
-    /// Returns [`ServiceError::Conflict`] if a key with the same name already exists.
+    /// Returns [`ServiceError::Conflict`] with detail `"key already exists"` if
+    /// a key with the same name already exists.
     /// Returns [`ServiceError::BadRequest`] if `key_type` is not a recognized key type.
     ///
     /// If `key_type` is empty or blank, it defaults to `"aes256-gcm"`. This
@@ -360,7 +363,7 @@ mod tests {
             .create_key(&AuthContext::root(), "dup", "aes256-gcm", false)
             .await
             .unwrap_err();
-        assert!(matches!(err, crate::ServiceError::Conflict));
+        assert!(matches!(err, crate::ServiceError::Conflict(_)));
     }
 
     // ---- BadRequest tests ------------------------------------------------
@@ -447,8 +450,29 @@ mod tests {
             KeyType::ChaCha20Poly1305,
         ));
         assert!(
-            matches!(err, crate::ServiceError::Conflict),
+            matches!(err, crate::ServiceError::Conflict(_)),
             "expected Conflict for a legacy key's unimplemented algorithm, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn key_exists_and_key_algorithm_not_implemented_carry_distinct_details() {
+        // The whole point of carrying a detail on Conflict is that these two
+        // causes, both mapped to HTTP 409, must no longer be indistinguishable.
+        let exists_err = map_transit_error(TransitError::KeyExists("dup".into()));
+        let unimplemented_err = map_transit_error(TransitError::KeyAlgorithmNotImplemented(
+            KeyType::ChaCha20Poly1305,
+        ));
+        let (
+            crate::ServiceError::Conflict(exists_detail),
+            crate::ServiceError::Conflict(unimplemented_detail),
+        ) = (exists_err, unimplemented_err)
+        else {
+            panic!("expected both errors to map to ServiceError::Conflict");
+        };
+        assert_ne!(
+            exists_detail, unimplemented_detail,
+            "KeyExists and KeyAlgorithmNotImplemented must carry distinct 409 details"
         );
     }
 
