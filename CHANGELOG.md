@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Release note:** this batch includes a source break (`TransitError` is now
+> `#[non_exhaustive]`) and an observable API surface change (`create_key`
+> rejects `chacha20-poly1305`). It must ship as `0.2.0`, not a patch release.
+
 ### Changed
 - Transit: `create_key` refuses `chacha20-poly1305` at creation time. That
   type was accepted since 0.1.0 but never actually implemented: keys created
@@ -18,26 +22,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forcing a major version bump.
 
 ### Fixed
-- Transit: `decrypt` and `rewrap` now check a ciphertext's algorithm against
-  the engine's actual implemented algorithm (AES-256-GCM), not against the
-  key's declared `key_type`. A key created in 0.1.0 with the declared type
-  `chacha20-poly1305` was always encrypted under AES-256-GCM in practice;
-  previously such a key's ciphertexts were rejected with
-  `CiphertextAlgorithmMismatch` even though they were physically
-  decryptable, making that data permanently inaccessible. `encrypt` now
-  refuses to run on such a key (`TransitError::UnsupportedKeyType`) instead
-  of emitting a ciphertext mislabelled with an algorithm it was not actually
-  encrypted under.
+- Transit: the ciphertext envelope now carries its own algorithm
+  (`egide:v{n}:{base64}` for AES-256-GCM, `egide:v{n}:{algorithm}:{base64}`
+  for anything else), and `decrypt` / `rewrap` check it against the engine's
+  actual implemented algorithm, not against the key's declared `key_type`.
+  Under 0.1.0, a key declared `chacha20-poly1305` was in fact always
+  encrypted under AES-256-GCM, and `decrypt` performed no algorithm check at
+  all; existing 0.1.0 ciphertexts under such a key remain readable exactly
+  as before. What changes is `encrypt`: it now refuses to run on a key whose
+  declared type is not the engine's implemented algorithm
+  (`TransitError::KeyAlgorithmNotImplemented`), instead of silently
+  encrypting under AES-256-GCM while the key still claims
+  `chacha20-poly1305`.
 
 ### Upgrade Notes
 - A transit key declared `chacha20-poly1305` under 0.1.0 remains readable:
   its existing ciphertexts still decrypt. Any operation that produces a new
-  ciphertext on such a key now fails with `TransitError::UnsupportedKeyType`,
-  including `encrypt` and `rewrap` of a ciphertext that is not already at the
-  key's latest version (`rewrap` of a ciphertext already at the latest
-  version is a no-op and still succeeds). Do not keep such a key in place:
-  replace it, re-encrypting its data under a new key using the default
-  `aes256-gcm` type.
+  ciphertext or a new key version on such a key now fails with
+  `TransitError::KeyAlgorithmNotImplemented` (HTTP `409 Conflict`), including
+  `encrypt`, `encrypt_with_version`, `generate_datakey`, `rotate_key`, and
+  `rewrap` of a ciphertext that is not already at the key's latest version.
+  `rewrap` of a ciphertext already at the latest version is a no-op and
+  still succeeds, but this is not a migration path: the key stays declared
+  under an algorithm this build does not implement, and running a rewrap
+  sweep over it will report success without changing anything. Do not keep
+  such a key in place: migrate by re-encrypting its data under a new key
+  created with the default `aes256-gcm` type.
 
 ## [0.1.0] - 2026-07-08
 

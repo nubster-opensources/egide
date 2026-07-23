@@ -137,22 +137,26 @@ After Rotation:
 
 ```text
 Input:                         Output:
-┌─────────────┐               ┌─────────────────────────────┐
-│  Plaintext  │──────────────>│ egide:v1:key:3:base64data   │
-└─────────────┘               └─────────────────────────────┘
-                                    │    │   │
-                                    │    │   └─ Encrypted data
-                                    │    └───── Key version
-                                    └────────── Format identifier
+┌─────────────┐               ┌─────────────────────┐
+│  Plaintext  │──────────────>│ egide:v3:base64data  │
+└─────────────┘               └─────────────────────┘
+                                    │    │
+                                    │    └─ Encrypted data
+                                    └────── Key version
 ```
+
+The key name is not part of the ciphertext (it is bound in as associated
+data, not encoded), and the algorithm segment only appears for a key type
+other than AES-256-GCM, the only one this build implements: see
+[Transit Engine: Ciphertext Format](transit-engine.md#ciphertext-format).
 
 ### Decrypt
 
 ```text
-Input:                              Output:
-┌─────────────────────────────┐    ┌─────────────┐
-│ egide:v1:key:3:base64data   │───>│  Plaintext  │
-└─────────────────────────────┘    └─────────────┘
+Input:                          Output:
+┌─────────────────────┐        ┌─────────────┐
+│ egide:v3:base64data  │──────>│  Plaintext  │
+└─────────────────────┘        └─────────────┘
         │
         └─ Extracts version 3 to decrypt
 ```

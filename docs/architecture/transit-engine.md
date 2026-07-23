@@ -64,7 +64,7 @@ POST /v1/transit/encrypt/my-key
 
 Response:
 {
-  "ciphertext": "egide:v1:my-key:3:aBcDeFgH..."
+  "ciphertext": "egide:v3:aBcDeFgH..."
 }
 ```
 
@@ -76,7 +76,7 @@ Decrypt ciphertext using the key version encoded in the ciphertext.
 Request:
 POST /v1/transit/decrypt/my-key
 {
-  "ciphertext": "egide:v1:my-key:3:aBcDeFgH..."
+  "ciphertext": "egide:v3:aBcDeFgH..."
 }
 
 Response:
@@ -93,25 +93,37 @@ Re-encrypt ciphertext with the latest key version without exposing plaintext.
 Request:
 POST /v1/transit/rewrap/my-key
 {
-  "ciphertext": "egide:v1:my-key:1:oldData..."  // v1
+  "ciphertext": "egide:v1:oldData..."  // v1
 }
 
 Response:
 {
-  "ciphertext": "egide:v1:my-key:5:newData..."  // v5 (latest)
+  "ciphertext": "egide:v5:newData..."  // v5 (latest)
 }
 ```
 
 ## Ciphertext Format
 
+The key name is never part of the ciphertext: it is bound in as associated
+data during encryption, not encoded in the envelope. AES-256-GCM, the only
+algorithm this build implements, keeps the historical short form. Any other
+algorithm (currently none is implemented) would use the long form instead.
+
 ```text
-egide:v1:key-name:version:base64-data
-  │    │     │       │         │
-  │    │     │       │         └─ Encrypted data
-  │    │     │       └─────────── Key version used
-  │    │     └─────────────────── Key name
-  │    └───────────────────────── Format version
-  └────────────────────────────── Egide prefix
+Short form (AES-256-GCM):
+egide:v3:base64-data
+  │    │       │
+  │    │       └─ Encrypted data (ciphertext + auth tag), base64-encoded
+  │    └───────── Key version used
+  └────────────── Egide prefix
+
+Long form (any other algorithm):
+egide:v3:algorithm:base64-data
+  │    │      │         │
+  │    │      │         └─ Encrypted data (ciphertext + auth tag), base64-encoded
+  │    │      └─────────── Algorithm the data was encrypted under
+  │    └────────────────── Key version used
+  └─────────────────────── Egide prefix
 ```
 
 ### Format Details
@@ -119,10 +131,14 @@ egide:v1:key-name:version:base64-data
 | Component | Description |
 |-----------|-------------|
 | `egide` | Identifier prefix |
-| `v1` | Ciphertext format version |
-| `key-name` | Name of the transit key |
-| `version` | Key version used for encryption |
+| `v3` | Key version used for encryption (not a ciphertext format version) |
+| `algorithm` | Present only in the long form; the base64 alphabet excludes `:`, so the number of `:`-separated segments unambiguously tells short from long form |
 | `base64-data` | Base64-encoded encrypted data with nonce |
+
+Both forms are accepted on decryption and checked against the engine's
+actual implemented algorithm, never against the key's declared type: a key
+created under a type accepted by an earlier release but never implemented
+stays decryptable. `encrypt` only ever emits the short form.
 
 ## Encryption Modes
 
@@ -133,8 +149,8 @@ egide:v1:key-name:version:base64-data
 - Recommended for most use cases
 
 ```text
-Encrypt("hello") → "egide:v1:key:1:aBc..."
-Encrypt("hello") → "egide:v1:key:1:xYz..."  // Different!
+Encrypt("hello") → "egide:v1:aBc..."
+Encrypt("hello") → "egide:v1:xYz..."  // Different!
 ```
 
 ### Convergent Encryption
@@ -151,9 +167,9 @@ convergent: true
 ```
 
 ```text
-Encrypt("hello", context="user-1") → "egide:v1:key:1:aBc..."
-Encrypt("hello", context="user-1") → "egide:v1:key:1:aBc..."  // Same!
-Encrypt("hello", context="user-2") → "egide:v1:key:1:xYz..."  // Different context
+Encrypt("hello", context="user-1") → "egide:v1:aBc..."
+Encrypt("hello", context="user-1") → "egide:v1:aBc..."  // Same!
+Encrypt("hello", context="user-2") → "egide:v1:xYz..."  // Different context
 ```
 
 ## Datakey Generation
@@ -196,7 +212,7 @@ POST /v1/transit/datakey/my-key
 Response:
 {
   "plaintext": "base64-raw-key",      // 32 bytes for AES-256
-  "ciphertext": "egide:v1:my-key:3:..."
+  "ciphertext": "egide:v3:..."
 }
 ```
 
@@ -220,9 +236,9 @@ POST /v1/transit/encrypt/my-key
 Response:
 {
   "batch_results": [
-    { "ciphertext": "egide:v1:my-key:3:..." },
-    { "ciphertext": "egide:v1:my-key:3:..." },
-    { "ciphertext": "egide:v1:my-key:3:..." }
+    { "ciphertext": "egide:v3:..." },
+    { "ciphertext": "egide:v3:..." },
+    { "ciphertext": "egide:v3:..." }
   ]
 }
 ```
@@ -242,13 +258,13 @@ Transit automatically handles key rotation:
 1. Key rotated (v1 → v2)
 
 2. New encryptions use v2
-   Encrypt("data") → "egide:v1:key:2:..."
+   Encrypt("data") → "egide:v2:..."
 
 3. Old ciphertext still decrypts
-   Decrypt("egide:v1:key:1:...") → "data"  ✅
+   Decrypt("egide:v1:...") → "data"  ✅
 
 4. Rewrap upgrades to v2
-   Rewrap("egide:v1:key:1:...") → "egide:v1:key:2:..."
+   Rewrap("egide:v1:...") → "egide:v2:..."
 ```
 
 ### Minimum Version Enforcement
