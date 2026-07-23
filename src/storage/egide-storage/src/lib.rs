@@ -8,6 +8,8 @@
 
 pub mod backend;
 pub mod error;
+pub mod pattern;
 
 pub use backend::StorageBackend;
 pub use error::StorageError;
+pub use pattern::{escape_like_pattern, prefix_pattern, LIKE_ESCAPE_CHAR};

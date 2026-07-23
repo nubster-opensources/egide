@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::{debug, info};
 
-use egide_storage::{StorageBackend, StorageError};
+use egide_storage::{prefix_pattern, StorageBackend, StorageError};
 
 /// `PostgreSQL` storage backend with schema-per-tenant isolation.
 ///
@@ -201,41 +201,42 @@ impl StorageBackend for PostgresBackend {
     async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
         let now = Self::now();
 
-        let select_sql = format!(
-            "SELECT version FROM \"{}\".kv_store WHERE key = $1",
-            self.tenant
-        );
-        let existing: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(select_sql))
-            .bind(key)
-            .fetch_optional(&self.pool)
+        // Postgres does not need BEGIN IMMEDIATE: INSERT ... ON CONFLICT DO
+        // UPDATE takes the row lock itself, so a plain transaction already
+        // serializes concurrent writers on the same key.
+        let mut transaction = self
+            .pool
+            .begin()
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
-        let (version, operation) = match existing {
-            Some((v,)) => (v + 1, "update"),
-            None => (1, "create"),
-        };
-
+        // The database owns the version counter. Computing it in a prior
+        // SELECT would leave a window for a concurrent writer to reuse it.
+        // The insert target is aliased so the SET clause can reference the
+        // pre-existing row unambiguously, regardless of the schema
+        // qualification of the target table.
         let upsert_sql = format!(
             r#"
-            INSERT INTO "{}".kv_store (key, value, version, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO "{}".kv_store AS existing (key, value, version, created_at, updated_at)
+            VALUES ($1, $2, 1, $3, $4)
             ON CONFLICT (key) DO UPDATE SET
                 value = EXCLUDED.value,
-                version = EXCLUDED.version,
+                version = existing.version + 1,
                 updated_at = EXCLUDED.updated_at
+            RETURNING version
             "#,
             self.tenant
         );
-        sqlx::query(sqlx::AssertSqlSafe(upsert_sql))
+        let (version,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(upsert_sql))
             .bind(key)
             .bind(value)
-            .bind(version)
             .bind(now)
             .bind(now)
-            .execute(&self.pool)
+            .fetch_one(&mut *transaction)
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+
+        let operation = if version == 1 { "create" } else { "update" };
 
         let history_sql = format!(
             "INSERT INTO \"{}\".kv_history (key, value, version, operation, actor, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -248,7 +249,12 @@ impl StorageBackend for PostgresBackend {
             .bind(operation)
             .bind(self.actor.as_deref())
             .bind(now)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+
+        transaction
+            .commit()
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
@@ -256,26 +262,25 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
-        let select_sql = format!(
-            "SELECT version FROM \"{}\".kv_store WHERE key = $1",
-            self.tenant
-        );
-        let existing: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(select_sql))
-            .bind(key)
-            .fetch_optional(&self.pool)
+        let now = Self::now();
+
+        let mut transaction = self
+            .pool
+            .begin()
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
-        if let Some((version,)) = existing {
-            let now = Self::now();
+        let delete_sql = format!(
+            "DELETE FROM \"{}\".kv_store WHERE key = $1 RETURNING version",
+            self.tenant
+        );
+        let deleted: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(delete_sql))
+            .bind(key)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
-            let delete_sql = format!("DELETE FROM \"{}\".kv_store WHERE key = $1", self.tenant);
-            sqlx::query(sqlx::AssertSqlSafe(delete_sql))
-                .bind(key)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
-
+        if let Some((version,)) = deleted {
             let history_sql = format!(
                 "INSERT INTO \"{}\".kv_history (key, value, version, operation, actor, timestamp) VALUES ($1, NULL, $2, 'delete', $3, $4)",
                 self.tenant
@@ -285,18 +290,23 @@ impl StorageBackend for PostgresBackend {
                 .bind(version + 1)
                 .bind(self.actor.as_deref())
                 .bind(now)
-                .execute(&self.pool)
+                .execute(&mut *transaction)
                 .await
                 .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
         }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
         Ok(())
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let pattern = format!("{prefix}%");
+        let pattern = prefix_pattern(prefix);
         let sql = format!(
-            "SELECT key FROM \"{}\".kv_store WHERE key LIKE $1",
+            r#"SELECT key FROM "{}".kv_store WHERE key LIKE $1 ESCAPE '\'"#,
             self.tenant
         );
 
@@ -504,6 +514,71 @@ mod tests {
         let mut keys = backend.list("").await.unwrap();
         keys.sort();
         assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_underscore_as_a_wildcard() {
+        let (_node, backend) = setup().await;
+
+        backend.put("prod_db", b"a").await.unwrap();
+        backend.put("prodXdb", b"b").await.unwrap();
+
+        let keys = backend.list("prod_").await.unwrap();
+
+        assert_eq!(
+            keys,
+            vec!["prod_db".to_string()],
+            "an underscore in the prefix must match literally"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_does_not_treat_percent_as_a_wildcard() {
+        let (_node, backend) = setup().await;
+
+        backend.put("100%off", b"a").await.unwrap();
+        backend.put("100nope", b"b").await.unwrap();
+
+        let keys = backend.list("100%").await.unwrap();
+
+        assert_eq!(keys, vec!["100%off".to_string()]);
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::items_after_statements,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    async fn test_concurrent_puts_on_a_fresh_key_yield_distinct_versions() {
+        let (_node, backend) = setup().await;
+        let backend = std::sync::Arc::new(backend);
+
+        const WRITERS: usize = 8;
+        let mut handles = Vec::with_capacity(WRITERS);
+        for index in 0..WRITERS {
+            let backend = std::sync::Arc::clone(&backend);
+            handles.push(tokio::spawn(async move {
+                backend.put("contended", &[index as u8]).await
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        let sql = "SELECT version FROM \"test-tenant\".kv_history WHERE key = $1 ORDER BY version";
+        let versions: Vec<(i64,)> = sqlx::query_as(sql)
+            .bind("contended")
+            .fetch_all(&backend.pool)
+            .await
+            .unwrap();
+
+        let observed: Vec<i64> = versions.into_iter().map(|(v,)| v).collect();
+        assert_eq!(
+            observed,
+            (1..=WRITERS as i64).collect::<Vec<_>>(),
+            "each concurrent writer must land on its own version"
+        );
     }
 
     #[tokio::test]

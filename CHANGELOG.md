@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `#[non_exhaustive]`) and an observable API surface change (`create_key`
 > rejects `chacha20-poly1305`). It must ship as `0.2.0`, not a patch release.
 
+### Added
+- Storage: `egide_storage::pattern`, a public helper module exposing
+  `escape_like_pattern` and `prefix_pattern`. Any backend or engine building a
+  `LIKE` pattern from caller-supplied text must route it through these and
+  state `ESCAPE '\'` in the query. SQLite defines no default escape character,
+  so the clause is mandatory rather than decorative.
+
 ### Changed
 - Transit: `create_key` refuses `chacha20-poly1305` at creation time. That
   type was accepted since 0.1.0 but never actually implemented: keys created
@@ -34,6 +41,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`TransitError::KeyAlgorithmNotImplemented`), instead of silently
   encrypting under AES-256-GCM while the key still claims
   `chacha20-poly1305`.
+- Storage: `put` and `delete` are now atomic. Both backends previously read the
+  current version, then wrote the new row and its history entry in separate
+  statements. Two concurrent writers could read the same version and produce
+  duplicated history versions, losing one of the two writes from the audit
+  trail. The version counter is now owned by the database itself
+  (`INSERT ... ON CONFLICT DO UPDATE SET version = <existing row>.version + 1
+  ... RETURNING version`) under the row lock, and the history entry is written in the same
+  transaction. SQLite opens the transaction with `BEGIN IMMEDIATE` so the write
+  lock is taken up front instead of being promoted mid-transaction.
+- Storage: `list` escapes `%`, `_` and `\` in the caller-supplied prefix before
+  building the `LIKE` pattern, on both the SQLite and PostgreSQL backends. A
+  bound parameter stops SQL injection but never stopped `LIKE` from
+  interpreting metacharacters inside the bound value: a prefix such as `%` or
+  `a_` matched keys outside the requested prefix.
+- Secrets: `list` had the same unescaped prefix, reachable through the HTTP and
+  gRPC API. A prefix containing `%` or `_` returned secret paths outside the
+  requested prefix. It now uses the shared escaping helper. This is a
+  correctness fix on the prefix, not an access-control boundary: `list` applies
+  no path scoping, and an empty prefix still lists every secret.
 
 ### Upgrade Notes
 - A transit key declared `chacha20-poly1305` under 0.1.0 remains readable:
@@ -48,6 +74,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep over it will report success without changing anything. Do not keep
   such a key in place: migrate by re-encrypting its data under a new key
   created with the default `aes256-gcm` type.
+- Storage: no schema change and no migration. Both storage fixes are code-only.
+- This release removes the version duplications caused by concurrent writers.
+  It does not change one nominal behaviour: a `delete` removes the `kv_store`
+  row, so a later write at the same path restarts at version 1 and adds another
+  `(key, 1)` row to `kv_history`. A recreated key can therefore hold repeated
+  versions in its history by design, with or without concurrency.
+- Rows written by an earlier version under concurrent load may already carry
+  concurrency-induced duplicates in `kv_history`. This release does not repair
+  them. Auditing an installation that ran under concurrent writers is
+  worthwhile.
+- Case sensitivity of `LIKE` still differs between backends: SQLite is
+  case-insensitive for ASCII, PostgreSQL is case-sensitive. Escaping is now
+  identical across backends; matching semantics are not. Do not rely on a
+  prefix listing being case-exact.
 
 ## [0.1.0] - 2026-07-08
 
