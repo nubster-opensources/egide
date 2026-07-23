@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS secret_versions (
     metadata    TEXT,
     created_at  INTEGER NOT NULL,
     created_by  TEXT,
+    generation_salt TEXT,
     PRIMARY KEY (path, version)
 );
 
@@ -160,6 +161,25 @@ impl SecretsEngine {
             .execute_raw(SCHEMA)
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
+
+        // Egide has no versioned migration framework: the schema is applied
+        // on every boot. SQLite rejects ADD COLUMN IF NOT EXISTS, so the
+        // duplicate-column error is the idempotency signal here.
+        let add_column = self
+            .storage
+            .execute(
+                "ALTER TABLE secret_versions ADD COLUMN generation_salt TEXT",
+                &[],
+            )
+            .await;
+
+        if let Err(error) = add_column {
+            let message = error.to_string();
+            if !message.contains("duplicate column") && !message.contains("already exists") {
+                return Err(SecretsError::Storage(message));
+            }
+        }
+
         Ok(())
     }
 
@@ -1735,5 +1755,28 @@ mod tests {
         // Using a 4-byte UTF-8 character (U+10340) to ensure the slice at [0..2] is incomplete.
         assert!(hex_decode("𐍀").is_err());
         assert!(hex_decode("𐍀𐍀").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_generation_salt_column_is_added_idempotently() {
+        let (_tmp, engine) = setup().await;
+
+        // Running the schema routine twice must not fail: there is no
+        // versioned migration framework, the schema is applied on every boot.
+        engine.init_schema().await.unwrap();
+        engine.init_schema().await.unwrap();
+
+        let row = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+
+        assert!(
+            row.is_ok(),
+            "the generation_salt column must exist after initialization"
+        );
     }
 }
