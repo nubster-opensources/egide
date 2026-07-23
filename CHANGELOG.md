@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer matching on it exhaustively (a wildcard arm is now required); it
   buys the room to add a variant in a future patch release instead of
   forcing a major version bump.
+- Secrets: the `secret_versions` table gains a nullable `generation_salt`
+  column. It is added automatically at startup by an idempotent
+  `ALTER TABLE`; no operator action and no downtime are required.
+- Secrets: versions written before this release carry no salt and are still
+  derived under the previous `egide-secrets-v2:{path}:{version}` context. That
+  context is retained on purpose and will remain as long as pre-upgrade rows
+  can exist. Each row is self-describing: the presence or absence of a salt on
+  the row alone selects the derivation.
 
 ### Fixed
 - Transit: the ciphertext envelope now carries its own algorithm
@@ -61,6 +69,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correctness fix on the prefix, not an access-control boundary: `list` applies
   no path scoping, and an empty prefix still lists every secret.
 
+### Security
+- Secrets: each secret generation now binds a fresh 32-byte random salt into
+  the HKDF context (`egide-secrets-v3:{path}:{version}:{salt}`). HKDF is
+  deterministic, so the previous context was fully determined by the path and
+  the version number: purging a deleted secret reset its versions to 1, and the
+  next write at that path re-derived the exact same encryption key as the
+  purged data. Two unrelated secret versions therefore shared a key. The salt
+  is a derivation nonce, not a secret, and is stored hex-encoded in clear on
+  each row of `secret_versions`. All versions of one generation share that
+  generation's salt; a purge followed by a new write at the same path draws a
+  new one.
+
 ### Upgrade Notes
 - A transit key declared `chacha20-poly1305` under 0.1.0 remains readable:
   its existing ciphertexts still decrypt. Any operation that produces a new
@@ -88,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case-insensitive for ASCII, PostgreSQL is case-sensitive. Escaping is now
   identical across backends; matching semantics are not. Do not rely on a
   prefix listing being case-exact.
+- Secrets: the upgrade is one-way for newly written secrets. Data written after
+  the upgrade uses the v3 context and cannot be read by 0.1.0: rolling the
+  binary back makes those secrets unreadable. Nothing is lost, since the salt
+  stays stored on the row and upgrading again restores readability, but plan the
+  rollback window accordingly.
+- Secrets written before the upgrade remain readable in both directions.
 
 ## [0.1.0] - 2026-07-08
 
