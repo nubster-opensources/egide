@@ -31,10 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade Notes
 - A transit key declared `chacha20-poly1305` under 0.1.0 remains readable:
-  `decrypt` and `rewrap` keep working on its existing ciphertexts. It no
-  longer accepts new encryption (`encrypt` returns
-  `TransitError::UnsupportedKeyType`) and should be replaced with a new key
-  using the default `aes256-gcm` type.
+  its existing ciphertexts still decrypt. Any operation that produces a new
+  ciphertext on such a key now fails with `TransitError::UnsupportedKeyType`,
+  including `encrypt` and `rewrap` of a ciphertext that is not already at the
+  key's latest version (`rewrap` of a ciphertext already at the latest
+  version is a no-op and still succeeds). Do not keep such a key in place:
+  replace it, re-encrypting its data under a new key using the default
+  `aes256-gcm` type.
 
 ## [0.1.0] - 2026-07-08
 
