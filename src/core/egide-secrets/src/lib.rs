@@ -1779,4 +1779,66 @@ mod tests {
             "the generation_salt column must exist after initialization"
         );
     }
+
+    #[tokio::test]
+    async fn test_generation_salt_column_is_added_to_pre_existing_table() {
+        let tmp = TempDir::new().unwrap();
+        let storage = SqliteBackend::open(tmp.path(), "test").await.unwrap();
+
+        // Recreate the table shape written before the generation_salt
+        // migration existed, so init_schema must migrate it via ALTER TABLE
+        // rather than via CREATE TABLE IF NOT EXISTS.
+        storage
+            .execute_raw(
+                r"
+                CREATE TABLE secret_versions (
+                    path        TEXT NOT NULL,
+                    version     INTEGER NOT NULL,
+                    data        BLOB NOT NULL,
+                    nonce       BLOB NOT NULL,
+                    expires_at  INTEGER,
+                    metadata    TEXT,
+                    created_at  INTEGER NOT NULL,
+                    created_by  TEXT,
+                    PRIMARY KEY (path, version)
+                );
+                ",
+            )
+            .await
+            .unwrap();
+
+        // The column must be absent before migration, otherwise this test
+        // would not distinguish the migration succeeding from it being a
+        // silently swallowed no-op.
+        let before = storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+        assert!(
+            before.is_err(),
+            "generation_salt must be absent before init_schema runs, got {before:?}"
+        );
+
+        let master_key = MasterKey::generate().unwrap();
+        let engine = SecretsEngine {
+            storage,
+            master_key,
+        };
+
+        engine.init_schema().await.unwrap();
+
+        let after = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+        assert!(
+            after.is_ok(),
+            "generation_salt must exist after migrating a pre-existing table, got {after:?}"
+        );
+    }
 }
