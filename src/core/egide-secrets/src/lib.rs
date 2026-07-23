@@ -13,12 +13,22 @@
 //! ## Encryption scheme
 //!
 //! Secret data is encrypted with AES-256-GCM under a key derived per
-//! `(path, version)` pair: HKDF-SHA256 over the master key with
-//! `info = "egide-secrets-v2:{path}:{version}"`. Each version row is inserted
-//! exactly once, so at most one ciphertext is ever persisted per derived key;
-//! the rare transient encryptions under a reused derivation context (CAS
-//! races, purge then re-create) stay far below the NIST SP 800-38D bound on
-//! random 96-bit nonces (2^32 messages per key), regardless of rotation rate.
+//! `(path, version, generation salt)`: HKDF-SHA256 over the master key with
+//! `info = "egide-secrets-v3:{path}:{version}:{generation_salt}"`. The
+//! generation salt is a random value drawn once when a path is first written
+//! (version 1) and reused, unchanged, by every later version of that path, so
+//! a path that is soft-deleted, purged, and re-created draws a fresh salt and
+//! never re-derives the key its previous generation used, even though
+//! numbering restarts at version 1. Each version row is inserted exactly
+//! once, so at most one ciphertext is ever persisted per derived key; the
+//! rare transient encryptions under a reused derivation context (CAS races)
+//! stay far below the NIST SP 800-38D bound on random 96-bit nonces (2^32
+//! messages per key), regardless of rotation rate.
+//!
+//! Rows written before the generation salt existed carry no salt: they keep
+//! deriving under the prior `egide-secrets-v2:{path}:{version}` context
+//! instead of `v3`, so they remain readable without a migration pass over
+//! existing ciphertext.
 //!
 //! The AEAD associated data is a canonical length-prefixed encoding of the
 //! domain tag, `path`, `version`, and the immutable per-version context columns
@@ -41,7 +51,7 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
-use egide_crypto::{aead, kdf, mac, MasterKey};
+use egide_crypto::{aead, kdf, mac, random, MasterKey};
 use egide_storage::prefix_pattern;
 use egide_storage_sqlite::SqliteBackend;
 
@@ -49,10 +59,21 @@ pub use error::SecretsError;
 
 /// Domain separation for secret encryption keys.
 ///
-/// The `v2` bump binds the secret version into the derivation, giving one
-/// key per `(path, version)` pair. Ciphertexts written under the `v1`
-/// scheme (path-only derivation) are deliberately not decryptable.
-const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v2:";
+/// The `v3` bump binds a random per-generation salt into the derivation, so a
+/// path that is purged and re-created never re-derives the key it used
+/// before. Rows written under `v2` carry no salt and keep their original
+/// derivation via [`SECRET_KEY_INFO_PREFIX_V2`].
+const SECRET_KEY_INFO_PREFIX: &str = "egide-secrets-v3:";
+
+/// Domain separation for secret encryption keys derived without a generation
+/// salt.
+///
+/// Kept alongside [`SECRET_KEY_INFO_PREFIX`] for as long as rows written
+/// under this scheme exist: it is what makes them still readable. The `v2`
+/// bump binds the secret version into the derivation, giving one key per
+/// `(path, version)` pair. Ciphertexts written under the `v1` scheme
+/// (path-only derivation) are deliberately not decryptable.
+const SECRET_KEY_INFO_PREFIX_V2: &str = "egide-secrets-v2:";
 
 /// Domain separation for the AEAD associated data.
 const SECRET_AAD_PREFIX: &str = "egide-secrets:";
@@ -80,6 +101,7 @@ CREATE TABLE IF NOT EXISTS secret_versions (
     metadata    TEXT,
     created_at  INTEGER NOT NULL,
     created_by  TEXT,
+    generation_salt TEXT,
     PRIMARY KEY (path, version)
 );
 
@@ -160,20 +182,49 @@ impl SecretsEngine {
             .execute_raw(SCHEMA)
             .await
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
+
+        // Egide has no versioned migration framework: the schema is applied
+        // on every boot. SQLite rejects ADD COLUMN IF NOT EXISTS, so the
+        // duplicate-column error is the idempotency signal here.
+        let add_column = self
+            .storage
+            .execute(
+                "ALTER TABLE secret_versions ADD COLUMN generation_salt TEXT",
+                &[],
+            )
+            .await;
+
+        if let Err(error) = add_column {
+            let message = error.to_string();
+            if !message.contains("duplicate column") && !message.contains("already exists") {
+                return Err(SecretsError::Storage(message));
+            }
+        }
+
         Ok(())
     }
 
     /// Derives an encryption key for one version of a secret.
     ///
-    /// Each `(path, version)` pair yields a distinct key, so every derived
-    /// key encrypts exactly one message and the random-nonce birthday bound
-    /// of AES-GCM can never be approached.
+    /// Each `(path, version, generation_salt)` triple yields a distinct key,
+    /// so every derived key encrypts exactly one message and the
+    /// random-nonce birthday bound of AES-GCM can never be approached. When
+    /// `generation_salt` is `None`, the key is derived under the legacy `v2`
+    /// context so rows written before the salt existed stay readable.
+    ///
+    /// `generation_salt` is the hex-encoded string as stored in the
+    /// `generation_salt` column, not raw bytes: that stored form is what
+    /// enters the HKDF info string.
     fn derive_secret_key(
         &self,
         path: &str,
         version: u32,
+        generation_salt: Option<&str>,
     ) -> Result<egide_crypto::SymmetricKey, SecretsError> {
-        let info = format!("{SECRET_KEY_INFO_PREFIX}{path}:{version}");
+        let info = match generation_salt {
+            Some(salt) => format!("{SECRET_KEY_INFO_PREFIX}{path}:{version}:{salt}"),
+            None => format!("{SECRET_KEY_INFO_PREFIX_V2}{path}:{version}"),
+        };
         let key_bytes = kdf::derive_key(self.master_key.as_bytes(), None, info.as_bytes(), 32)?;
         egide_crypto::SymmetricKey::from_bytes(&key_bytes).map_err(SecretsError::from)
     }
@@ -264,11 +315,12 @@ impl SecretsEngine {
         &self,
         path: &str,
         version: u32,
+        generation_salt: Option<&str>,
         expires_at_repr: &str,
         metadata_repr: &str,
         data: &HashMap<String, String>,
     ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
-        let key = self.derive_secret_key(path, version)?;
+        let key = self.derive_secret_key(path, version, generation_salt)?;
         let plaintext = serde_json::to_vec(data)
             .map_err(|e| SecretsError::Crypto(format!("serialization failed: {e}")))?;
 
@@ -283,16 +335,21 @@ impl SecretsEngine {
     }
 
     /// Decrypts secret data from storage.
+    ///
+    /// `sealed` is the stored `(data, nonce)` pair, grouped into a single
+    /// parameter to keep the argument count within the workspace clippy
+    /// limit.
     fn decrypt_data(
         &self,
         path: &str,
         version: u32,
+        generation_salt: Option<&str>,
         expires_at_repr: &str,
         metadata_repr: &str,
-        data: &[u8],
-        nonce: &[u8],
+        sealed: (&[u8], &[u8]),
     ) -> Result<HashMap<String, String>, SecretsError> {
-        let key = self.derive_secret_key(path, version)?;
+        let (data, nonce) = sealed;
+        let key = self.derive_secret_key(path, version, generation_salt)?;
 
         // Reconstruct ciphertext with nonce prefix
         let mut ciphertext = Vec::with_capacity(nonce.len() + data.len());
@@ -372,6 +429,7 @@ impl SecretsEngine {
             .map_err(|e| SecretsError::Storage(e.to_string()))?;
 
         let new_version: u32;
+        let existing_generation_salt: Option<String>;
 
         if let Some((current_version, deleted_at, row_mac)) = existing {
             // Secret exists: authenticate the pointer before trusting its version.
@@ -395,6 +453,20 @@ impl SecretsEngine {
 
             new_version = current_version + 1;
 
+            // Read the previous version's generation salt so this new version
+            // stays in the same context family instead of starting one of its
+            // own.
+            existing_generation_salt = self
+                .storage
+                .query_one::<(String,)>(
+                    "SELECT COALESCE(generation_salt, '') FROM secret_versions WHERE path = ? AND version = ?",
+                    &[path, &current_version.to_string()],
+                )
+                .await
+                .map_err(|e| SecretsError::Storage(e.to_string()))?
+                .map(|(salt,)| salt)
+                .filter(|salt| !salt.is_empty());
+
             // Update secrets table
             let row_mac = self.pointer_mac(path, new_version, "")?;
             self.storage
@@ -416,6 +488,7 @@ impl SecretsEngine {
             }
 
             new_version = 1;
+            existing_generation_salt = None;
 
             // Insert into secrets table
             let row_mac = self.pointer_mac(path, new_version, "")?;
@@ -434,18 +507,33 @@ impl SecretsEngine {
                 .map_err(|e| SecretsError::Storage(e.to_string()))?;
         }
 
+        // A generation salt is drawn once per generation and reused by every
+        // version of that generation, so all versions of a path derive from
+        // the same context family while a purged-and-recreated path never
+        // does.
+        let generation_salt = match existing_generation_salt {
+            Some(salt) => salt,
+            None => hex_encode(random::generate_key()?.as_ref()),
+        };
+
         // The exact stored string forms of the immutable per-version context,
         // bound into the AAD so a later tamper of either column fails closed.
         let expires_at_repr = expires_at.map(|e| e.to_string()).unwrap_or_default();
         let metadata_repr = metadata_json.unwrap_or_default();
 
         // Encrypt and store version data
-        let (encrypted_data, nonce) =
-            self.encrypt_data(path, new_version, &expires_at_repr, &metadata_repr, &data)?;
+        let (encrypted_data, nonce) = self.encrypt_data(
+            path,
+            new_version,
+            Some(generation_salt.as_str()),
+            &expires_at_repr,
+            &metadata_repr,
+            &data,
+        )?;
 
         self.storage
             .execute(
-                "INSERT INTO secret_versions (path, version, data, nonce, expires_at, metadata, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO secret_versions (path, version, data, nonce, expires_at, metadata, created_at, created_by, generation_salt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 &[
                     path,
                     &new_version.to_string(),
@@ -455,6 +543,7 @@ impl SecretsEngine {
                     &metadata_repr,
                     &now.to_string(),
                     &self.storage.current_actor().unwrap_or_default(),
+                    &generation_salt,
                 ],
             )
             .await
@@ -522,8 +611,8 @@ impl SecretsEngine {
 
         let row = self
             .storage
-            .query_one::<(String, String, String, String, String)>(
-                "SELECT data, nonce, COALESCE(CAST(expires_at AS TEXT), ''), COALESCE(metadata, ''), CAST(created_at AS TEXT) FROM secret_versions WHERE path = ? AND version = ?",
+            .query_one::<(String, String, String, String, String, String)>(
+                "SELECT data, nonce, COALESCE(CAST(expires_at AS TEXT), ''), COALESCE(metadata, ''), CAST(created_at AS TEXT), COALESCE(generation_salt, '') FROM secret_versions WHERE path = ? AND version = ?",
                 &[path, &version.to_string()],
             )
             .await
@@ -533,7 +622,12 @@ impl SecretsEngine {
                 version,
             })?;
 
-        let (data_hex, nonce_hex, expires_at_str, metadata_json, created_at_str) = row;
+        let (data_hex, nonce_hex, expires_at_str, metadata_json, created_at_str, salt_repr) = row;
+        let generation_salt = if salt_repr.is_empty() {
+            None
+        } else {
+            Some(salt_repr.as_str())
+        };
 
         // Parse timestamps
         let created_at: u64 = created_at_str.parse().unwrap_or(0);
@@ -562,10 +656,10 @@ impl SecretsEngine {
         let data = self.decrypt_data(
             path,
             version,
+            generation_salt,
             &expires_at_str,
             &metadata_json,
-            &data_bytes,
-            &nonce_bytes,
+            (&data_bytes, &nonce_bytes),
         )?;
 
         let metadata = if metadata_json.is_empty() {
@@ -1701,13 +1795,120 @@ mod tests {
     async fn test_derived_keys_differ_across_versions_and_paths() {
         let (_tmp, engine) = setup().await;
 
-        let key_v1 = engine.derive_secret_key("app/kdf", 1).unwrap();
-        let key_v2 = engine.derive_secret_key("app/kdf", 2).unwrap();
-        let key_other_path = engine.derive_secret_key("app/kdf-other", 1).unwrap();
+        let key_v1 = engine.derive_secret_key("app/kdf", 1, None).unwrap();
+        let key_v2 = engine.derive_secret_key("app/kdf", 2, None).unwrap();
+        let key_other_path = engine.derive_secret_key("app/kdf-other", 1, None).unwrap();
 
         assert_ne!(key_v1.as_bytes(), key_v2.as_bytes());
         assert_ne!(key_v1.as_bytes(), key_other_path.as_bytes());
         assert_ne!(key_v2.as_bytes(), key_other_path.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_derivation_differs_across_generation_salts() {
+        let (_tmp, engine) = setup().await;
+
+        let without = engine.derive_secret_key("app/gen", 1, None).unwrap();
+        let with_first = engine
+            .derive_secret_key("app/gen", 1, Some("00112233445566778899aabbccddeeff"))
+            .unwrap();
+        let with_second = engine
+            .derive_secret_key("app/gen", 1, Some("ffeeddccbbaa99887766554433221100"))
+            .unwrap();
+
+        assert_ne!(without.as_bytes(), with_first.as_bytes());
+        assert_ne!(with_first.as_bytes(), with_second.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_purge_then_recreate_does_not_reuse_the_derivation_context() {
+        let (_tmp, engine) = setup().await;
+
+        let mut data = HashMap::new();
+        data.insert("k".to_string(), "first".to_string());
+        engine
+            .put("app/cycle", data.clone(), PutOptions::default())
+            .await
+            .unwrap();
+
+        let first_salt = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/cycle"],
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+
+        engine.delete("app/cycle").await.unwrap();
+
+        // Ensure deleted_at lands strictly before the purge cutoff.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        engine.purge_deleted(Duration::from_secs(0)).await.unwrap();
+
+        data.insert("k".to_string(), "second".to_string());
+        engine
+            .put("app/cycle", data, PutOptions::default())
+            .await
+            .unwrap();
+
+        let second_salt = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions WHERE path = ? AND version = 1",
+                &["app/cycle"],
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+
+        assert!(
+            !first_salt.is_empty(),
+            "a fresh generation must carry a salt"
+        );
+        assert_ne!(
+            first_salt, second_salt,
+            "a re-created secret must not reuse the previous derivation context"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rows_without_a_salt_stay_readable() {
+        let (_tmp, engine) = setup().await;
+
+        let mut data = HashMap::new();
+        data.insert("k".to_string(), "legacy".to_string());
+        engine
+            .put("app/legacy", data, PutOptions::default())
+            .await
+            .unwrap();
+
+        // Simulate a row written before the salt existed: clear the column and
+        // re-encrypt under the v2 context.
+        let key = engine.derive_secret_key("app/legacy", 1, None).unwrap();
+        let mut legacy = HashMap::new();
+        legacy.insert("k".to_string(), "legacy".to_string());
+        let plaintext = serde_json::to_vec(&legacy).unwrap();
+        let aad = SecretsEngine::secret_aad("app/legacy", 1, "", "").unwrap();
+        let sealed = aead::encrypt(key.as_bytes(), &plaintext, Some(&aad)).unwrap();
+        let nonce_hex = hex_encode(&sealed[..12]);
+        let data_hex = hex_encode(&sealed[12..]);
+
+        engine
+            .storage
+            .execute(
+                "UPDATE secret_versions SET generation_salt = NULL, data = ?, nonce = ? WHERE path = ? AND version = 1",
+                &[&data_hex, &nonce_hex, "app/legacy"],
+            )
+            .await
+            .unwrap();
+
+        let secret = engine.get("app/legacy").await.unwrap();
+        assert_eq!(secret.data.get("k"), Some(&"legacy".to_string()));
     }
 
     #[tokio::test]
@@ -1735,5 +1936,90 @@ mod tests {
         // Using a 4-byte UTF-8 character (U+10340) to ensure the slice at [0..2] is incomplete.
         assert!(hex_decode("𐍀").is_err());
         assert!(hex_decode("𐍀𐍀").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_generation_salt_column_is_added_idempotently() {
+        let (_tmp, engine) = setup().await;
+
+        // Running the schema routine twice must not fail: there is no
+        // versioned migration framework, the schema is applied on every boot.
+        engine.init_schema().await.unwrap();
+        engine.init_schema().await.unwrap();
+
+        let row = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+
+        assert!(
+            row.is_ok(),
+            "the generation_salt column must exist after initialization"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generation_salt_column_is_added_to_pre_existing_table() {
+        let tmp = TempDir::new().unwrap();
+        let storage = SqliteBackend::open(tmp.path(), "test").await.unwrap();
+
+        // Recreate the table shape written before the generation_salt
+        // migration existed, so init_schema must migrate it via ALTER TABLE
+        // rather than via CREATE TABLE IF NOT EXISTS.
+        storage
+            .execute_raw(
+                r"
+                CREATE TABLE secret_versions (
+                    path        TEXT NOT NULL,
+                    version     INTEGER NOT NULL,
+                    data        BLOB NOT NULL,
+                    nonce       BLOB NOT NULL,
+                    expires_at  INTEGER,
+                    metadata    TEXT,
+                    created_at  INTEGER NOT NULL,
+                    created_by  TEXT,
+                    PRIMARY KEY (path, version)
+                );
+                ",
+            )
+            .await
+            .unwrap();
+
+        // The column must be absent before migration, otherwise this test
+        // would not distinguish the migration succeeding from it being a
+        // silently swallowed no-op.
+        let before = storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+        assert!(
+            before.is_err(),
+            "generation_salt must be absent before init_schema runs, got {before:?}"
+        );
+
+        let master_key = MasterKey::generate().unwrap();
+        let engine = SecretsEngine {
+            storage,
+            master_key,
+        };
+
+        engine.init_schema().await.unwrap();
+
+        let after = engine
+            .storage
+            .query_one::<(String,)>(
+                "SELECT COALESCE(generation_salt, '') FROM secret_versions LIMIT 1",
+                &[],
+            )
+            .await;
+        assert!(
+            after.is_ok(),
+            "generation_salt must exist after migrating a pre-existing table, got {after:?}"
+        );
     }
 }
