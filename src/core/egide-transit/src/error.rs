@@ -71,7 +71,7 @@ pub enum TransitError {
     UnsupportedKeyType(crate::KeyType),
 
     /// Ciphertext declares an algorithm the engine does not implement.
-    #[error("ciphertext algorithm {found} does not match key algorithm {expected}")]
+    #[error("ciphertext algorithm {found} does not match engine algorithm {expected}")]
     CiphertextAlgorithmMismatch {
         /// Algorithm the engine actually implements.
         expected: crate::KeyType,

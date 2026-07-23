@@ -54,7 +54,7 @@ fn map_transit_error(err: TransitError) -> ServiceError {
             format!("key version {version} is below min_decryption_version {min}"),
         ),
         TransitError::CiphertextAlgorithmMismatch { expected, found } => ServiceError::BadRequest(
-            format!("ciphertext algorithm {found} does not match key algorithm {expected}"),
+            format!("ciphertext algorithm {found} does not match engine algorithm {expected}"),
         ),
         TransitError::DecryptionFailed => ServiceError::DecryptionFailed,
         TransitError::OperationNotAllowed(msg)
