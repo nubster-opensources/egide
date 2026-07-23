@@ -287,7 +287,7 @@ pub async fn init_handler(
         })?;
 
     tracing::info!(
-        "Vault initialized with {} shares, threshold {}",
+        "Egide initialized with {} shares, threshold {}",
         req.secret_shares,
         req.secret_threshold
     );
@@ -321,7 +321,7 @@ pub async fn unseal_handler(
     if view.sealed {
         tracing::info!("Unseal progress: {}/{}", view.progress, view.threshold);
     } else {
-        tracing::info!("Vault unsealed successfully");
+        tracing::info!("Egide unsealed successfully");
     }
 
     Ok(Json(UnsealResponse {
@@ -351,7 +351,7 @@ pub async fn seal_handler(
         )
     })?;
 
-    tracing::info!("Vault sealed");
+    tracing::info!("Egide sealed");
     Ok(Json(SealResponse { sealed: true }))
 }
 
