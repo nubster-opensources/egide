@@ -24,7 +24,7 @@ use crate::{ServiceContext, ServiceError};
 /// | `TransitError`                                              | `ServiceError`            |
 /// |-------------------------------------------------------------|---------------------------|
 /// | `KeyNotFound` / `VersionNotFound`                           | `NotFound`                |
-/// | `KeyExists`                                                 | `Conflict`                |
+/// | `KeyExists` / `KeyAlgorithmNotImplemented`                  | `Conflict`                |
 /// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` /  | `BadRequest`              |
 /// | `UnsupportedKeyType` / `VersionBelowMinEncryption` /         |                           |
 /// | `VersionBelowMinDecryption` / `CiphertextAlgorithmMismatch`  |                           |
@@ -37,7 +37,9 @@ fn map_transit_error(err: TransitError) -> ServiceError {
         TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
             ServiceError::NotFound
         },
-        TransitError::KeyExists(_) => ServiceError::Conflict,
+        TransitError::KeyExists(_) | TransitError::KeyAlgorithmNotImplemented(_) => {
+            ServiceError::Conflict
+        },
         TransitError::InvalidCiphertext => {
             ServiceError::BadRequest("invalid ciphertext format".into())
         },
@@ -434,6 +436,20 @@ mod tests {
         let ct = c.encrypt("round", plaintext).await.unwrap();
         let recovered = c.decrypt("round", &ct).await.unwrap();
         assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn key_algorithm_not_implemented_maps_to_conflict() {
+        // A key persisted under an algorithm this build does not implement
+        // is a server-side state problem, not a malformed request: it must
+        // map to Conflict (409), not BadRequest (400).
+        let err = map_transit_error(TransitError::KeyAlgorithmNotImplemented(
+            KeyType::ChaCha20Poly1305,
+        ));
+        assert!(
+            matches!(err, crate::ServiceError::Conflict),
+            "expected Conflict for a legacy key's unimplemented algorithm, got {err:?}"
+        );
     }
 
     #[tokio::test]

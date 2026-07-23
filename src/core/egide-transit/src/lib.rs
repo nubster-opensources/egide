@@ -18,9 +18,12 @@
 //! stay decryptable. Both forms are accepted on decryption, checked against
 //! the engine's effective algorithm rather than a key's declared type, so a
 //! key created under a type accepted but never implemented by an earlier
-//! release stays readable. Only the short form is emitted: `encrypt` refuses
-//! to run on a key whose declared type is not the effective algorithm,
-//! instead of producing a ciphertext with a misleading label.
+//! release stays readable. `encrypt` only ever emits the short form: it
+//! refuses to run on a key whose declared type is not the effective
+//! algorithm, instead of producing a ciphertext with a misleading label.
+//! `rewrap` does not carry that guarantee on its already-latest-version fast
+//! path: it returns the input ciphertext unchanged, so a caller who submits
+//! a long form already at the latest version gets that same long form back.
 
 #![forbid(unsafe_code)]
 
@@ -675,6 +678,16 @@ impl TransitEngine {
         Self::validate_name(name)?;
 
         let key = self.get_key(name).await?;
+
+        // A key declared under an algorithm the engine does not implement
+        // can never encrypt: a new version of its material would be created
+        // only to sit unusable, since `encrypt_with_version` refuses it too.
+        // An operation that can produce no usable effect must fail loudly
+        // rather than silently succeed.
+        if key.key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::KeyAlgorithmNotImplemented(key.key_type));
+        }
+
         let new_version = key.latest_version + 1;
         let now = Self::now()?;
 
@@ -846,8 +859,10 @@ impl TransitEngine {
         // encryption: there is no cipher to honor the promise, and labelling
         // the ciphertext with that declared type would be a lie. Existing
         // ciphertexts under such a key remain readable via decrypt/rewrap.
+        // This is server-side state, not a malformed request, hence the
+        // distinct variant from the one `create_key` returns.
         if key.key_type != ENGINE_ALGORITHM {
-            return Err(TransitError::UnsupportedKeyType(key.key_type));
+            return Err(TransitError::KeyAlgorithmNotImplemented(key.key_type));
         }
 
         if version < key.min_encryption_version {
@@ -964,7 +979,18 @@ impl TransitEngine {
         let (key_type, encoded) = if parts.len() == 3 {
             (KeyType::Aes256Gcm, parts[2])
         } else {
-            (parts[2].parse::<KeyType>()?, parts[3])
+            // An unparsable label means the ciphertext itself is malformed,
+            // not that the caller named a "key type": do not propagate
+            // `parts[2]` into the error. It is caller-controlled and
+            // unbounded (everything before the 4th `:` in a `splitn(4, ':')`),
+            // so reflecting it would let an attacker put arbitrary-length
+            // data into error responses and logs.
+            (
+                parts[2]
+                    .parse::<KeyType>()
+                    .map_err(|_| TransitError::InvalidCiphertext)?,
+                parts[3],
+            )
         };
 
         let data = BASE64
@@ -2291,7 +2317,35 @@ mod tests {
             .unwrap();
 
         let result = engine.decrypt("unknown-alg", "egide:v1:rot13:AAAA").await;
-        assert!(matches!(result, Err(TransitError::InvalidKeyType(_))));
+        assert!(matches!(result, Err(TransitError::InvalidCiphertext)));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_algorithm_label_is_not_reflected_in_error() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("unknown-alg-reflect", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // An arbitrary-length attacker-controlled label must not be echoed
+        // back: the error is about the ciphertext shape, not the label text.
+        let long_label = "x".repeat(10_000);
+        let forged = format!("egide:v1:{long_label}:AAAA");
+
+        let result = engine.decrypt("unknown-alg-reflect", &forged).await;
+        assert!(matches!(result, Err(TransitError::InvalidCiphertext)));
+
+        let message = result.unwrap_err().to_string();
+        assert!(
+            !message.contains(&long_label),
+            "error message must not reflect the caller-supplied algorithm label"
+        );
+        assert!(
+            message.len() < 200,
+            "error message must stay bounded regardless of input size, got {} bytes",
+            message.len()
+        );
     }
 
     // ========================================================================
@@ -2370,10 +2424,57 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(TransitError::UnsupportedKeyType(KeyType::ChaCha20Poly1305))
+                Err(TransitError::KeyAlgorithmNotImplemented(
+                    KeyType::ChaCha20Poly1305
+                ))
             ),
             "a legacy key declared chacha20-poly1305 must refuse new encryption \
              rather than emit a mislabeled ciphertext, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_chacha20_declared_key_refuses_rotation() {
+        let (_tmp, engine) = setup().await;
+
+        let key = engine
+            .create_key("legacy-chacha-rotate", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let legacy = TransitKey {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..key
+        };
+        let legacy_mac = engine.policy_mac(&legacy).unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ?, row_mac = ? WHERE name = ?",
+                &["chacha20-poly1305", &legacy_mac, "legacy-chacha-rotate"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.rotate_key("legacy-chacha-rotate").await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::KeyAlgorithmNotImplemented(
+                    KeyType::ChaCha20Poly1305
+                ))
+            ),
+            "rotating a legacy key declared under a never-implemented \
+             algorithm must fail, since the new version could never encrypt \
+             anything, got {result:?}"
+        );
+
+        // The rejection must happen before any new version row is written.
+        let versions = engine.list_versions("legacy-chacha-rotate").await.unwrap();
+        assert_eq!(
+            versions.len(),
+            1,
+            "rotation must not persist a new version on rejection"
         );
     }
 
