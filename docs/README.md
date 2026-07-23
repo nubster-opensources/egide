@@ -56,6 +56,10 @@ See the [Roadmap](explanation/roadmap.md) for the release plan.
 - [MSRV Policy](MSRV_POLICY.md): minimum supported Rust version guarantees
 - [Semver Policy](SEMVER_POLICY.md): API stability and versioning conventions
 
+### Decisions
+
+- [Architecture Decision Records](adr/README.md): the significant, durable decisions behind Egide
+
 ## Quick Links
 
 - [GitHub Repository](https://github.com/nubster-opensources/egide)

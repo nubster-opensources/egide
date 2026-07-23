@@ -24,6 +24,20 @@
 //! `rewrap` does not carry that guarantee on its already-latest-version fast
 //! path: it returns the input ciphertext unchanged, so a caller who submits
 //! a long form already at the latest version gets that same long form back.
+//!
+//! ## Message Limit per Key Version
+//!
+//! Each key version encrypts under AES-256-GCM with a fresh 96-bit nonce drawn
+//! from the system CSPRNG, independently per message. With random nonces the
+//! safety bound is set by nonce collision, not by key strength: after `q`
+//! encryptions under one key the probability that two messages share a nonce is
+//! about `q^2 / 2^97`. Following NIST SP 800-38D, keep that probability at or
+//! below `2^-32` by encrypting no more than about `2^32` (roughly 4.3 billion)
+//! messages under a single key version. A nonce collision in GCM is
+//! catastrophic: it leaks the XOR of the two plaintexts and can expose the
+//! authentication subkey, so this is a hard operational ceiling rather than a
+//! guideline. Because each version is a distinct key, `rotate_key` resets the
+//! count; rotate high-throughput keys well before the bound.
 
 #![forbid(unsafe_code)]
 
