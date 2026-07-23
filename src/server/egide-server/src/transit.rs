@@ -24,7 +24,7 @@ use crate::{AppState, Authenticated, Problem};
 pub struct CreateKeyRequest {
     /// Key name.
     pub name: String,
-    /// Optional key type (`aes256-gcm` default, or `chacha20-poly1305`).
+    /// Optional key type (`aes256-gcm` default; the only type implemented).
     #[serde(rename = "type")]
     pub key_type: Option<String>,
     /// Whether the key may later be deleted (default false).

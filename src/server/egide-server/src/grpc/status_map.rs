@@ -11,7 +11,7 @@ use tonic::Status;
 pub fn to_status(e: ServiceError) -> Status {
     match e {
         ServiceError::NotFound => Status::not_found("not found"),
-        ServiceError::Conflict => Status::already_exists("already exists"),
+        ServiceError::Conflict(detail) => Status::already_exists(detail),
         ServiceError::BadRequest(m) => Status::invalid_argument(m),
         ServiceError::Forbidden(m) => Status::permission_denied(m),
         ServiceError::Sealed => Status::unavailable("vault is sealed"),
@@ -32,10 +32,9 @@ mod tests {
 
     #[test]
     fn conflict_maps_to_already_exists() {
-        assert_eq!(
-            to_status(ServiceError::Conflict).code(),
-            Code::AlreadyExists
-        );
+        let s = to_status(ServiceError::Conflict("key already exists".into()));
+        assert_eq!(s.code(), Code::AlreadyExists);
+        assert!(s.message().contains("key already exists"));
     }
 
     #[test]

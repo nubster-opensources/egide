@@ -76,7 +76,7 @@ Example (5 shares, 3 threshold):
 
 | Purpose | Algorithm |
 |---------|-----------|
-| Data encryption | AES-256-GCM (Transit also offers ChaCha20-Poly1305 keys) |
+| Data encryption | AES-256-GCM (the only algorithm Transit implements) |
 | Datakey wrapping | AES-256-GCM (under the transit key) |
 | Signatures | Planned with the KMS engine (0.3.0): Ed25519, ECDSA, RSA-PSS |
 | Key derivation | HKDF-SHA256 |

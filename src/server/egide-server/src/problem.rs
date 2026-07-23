@@ -49,7 +49,7 @@ impl From<egide_api::ServiceError> for Problem {
         use egide_api::ServiceError as E;
         match e {
             E::NotFound => Problem::new(S::NOT_FOUND, "not found"),
-            E::Conflict => Problem::new(S::CONFLICT, "already exists"),
+            E::Conflict(detail) => Problem::new(S::CONFLICT, detail),
             E::BadRequest(m) => Problem::new(S::BAD_REQUEST, m),
             E::Forbidden(m) => Problem::new(S::FORBIDDEN, m),
             E::Sealed => Problem::new(S::SERVICE_UNAVAILABLE, "Vault is sealed"),

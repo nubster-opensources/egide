@@ -11,9 +11,19 @@
 //!
 //! ## Ciphertext Format
 //!
-//! Ciphertexts are encoded as: `egide:v{version}:{base64_ciphertext}`
-//!
-//! This allows the engine to determine which key version to use for decryption.
+//! Ciphertexts are encoded as `egide:v{version}:{base64}` for AES-256-GCM,
+//! and as `egide:v{version}:{algorithm}:{base64}` for any other algorithm.
+//! The short form is normatively AES-256-GCM: it predates algorithm
+//! labelling and is kept readable so ciphertexts written by earlier releases
+//! stay decryptable. Both forms are accepted on decryption, checked against
+//! the engine's effective algorithm rather than a key's declared type, so a
+//! key created under a type accepted but never implemented by an earlier
+//! release stays readable. `encrypt` only ever emits the short form: it
+//! refuses to run on a key whose declared type is not the effective
+//! algorithm, instead of producing a ciphertext with a misleading label.
+//! `rewrap` does not carry that guarantee on its already-latest-version fast
+//! path: it returns the input ciphertext unchanged, so a caller who submits
+//! a long form already at the latest version gets that same long form back.
 
 #![forbid(unsafe_code)]
 
@@ -104,6 +114,18 @@ impl FromStr for KeyType {
         }
     }
 }
+
+/// The algorithm this build of the engine actually encrypts and decrypts under.
+///
+/// `KeyType` enumerates every type the API can *declare*, but only one cipher
+/// is wired into [`TransitEngine::encrypt_with_version`] and
+/// [`TransitEngine::decrypt`] today: AES-256-GCM. Every algorithm decision the
+/// engine makes (what a ciphertext is checked against, what a new ciphertext
+/// is labelled with) must compare against this constant, never against a
+/// key's declared `key_type`, so a key whose declared type predates this
+/// distinction stays readable. Update this constant, and only this constant,
+/// the day a second cipher is actually implemented.
+const ENGINE_ALGORITHM: KeyType = KeyType::Aes256Gcm;
 
 /// Configuration for creating a new transit key.
 // Each bool maps to a distinct, independently togglable capability flag; a state machine would
@@ -407,6 +429,13 @@ impl TransitEngine {
     ) -> Result<TransitKey, TransitError> {
         Self::validate_name(name)?;
 
+        // Only the engine's effective algorithm is implemented. Accepting
+        // another key type would silently encrypt under it anyway, so fail
+        // closed here rather than persist a promise the engine cannot keep.
+        if config.key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::UnsupportedKeyType(config.key_type));
+        }
+
         // Check if key already exists
         let existing = self
             .storage
@@ -649,6 +678,16 @@ impl TransitEngine {
         Self::validate_name(name)?;
 
         let key = self.get_key(name).await?;
+
+        // A key declared under an algorithm the engine does not implement
+        // can never encrypt: a new version of its material would be created
+        // only to sit unusable, since `encrypt_with_version` refuses it too.
+        // An operation that can produce no usable effect must fail loudly
+        // rather than silently succeed.
+        if key.key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::KeyAlgorithmNotImplemented(key.key_type));
+        }
+
         let new_version = key.latest_version + 1;
         let now = Self::now()?;
 
@@ -815,6 +854,17 @@ impl TransitEngine {
             ));
         }
 
+        // A key declared under an algorithm the engine does not implement
+        // (a type accepted by an earlier release) must not be used for new
+        // encryption: there is no cipher to honor the promise, and labelling
+        // the ciphertext with that declared type would be a lie. Existing
+        // ciphertexts under such a key remain readable via decrypt/rewrap.
+        // This is server-side state, not a malformed request, hence the
+        // distinct variant from the one `create_key` returns.
+        if key.key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::KeyAlgorithmNotImplemented(key.key_type));
+        }
+
         if version < key.min_encryption_version {
             return Err(TransitError::VersionBelowMinEncryption {
                 version,
@@ -836,9 +886,15 @@ impl TransitEngine {
         let aad = format!("egide-transit:{name}:{version}");
         let ciphertext = aead::encrypt(&raw_key, plaintext, Some(aad.as_bytes()))?;
 
-        // Format: egide:v{version}:{base64}
-        let encoded = BASE64.encode(&ciphertext);
-        Ok(format!("egide:v{version}:{encoded}"))
+        // Label with the effective algorithm, not the declared key_type: the
+        // check above already guarantees the two agree for any key reaching
+        // this point, and this keeps the short form the only form ever
+        // emitted in practice.
+        Ok(Self::format_ciphertext(
+            version,
+            ENGINE_ALGORITHM,
+            &ciphertext,
+        ))
     }
 
     /// Decrypts ciphertext.
@@ -853,8 +909,23 @@ impl TransitEngine {
             ));
         }
 
-        // Parse ciphertext format: egide:v{version}:{base64}
-        let (version, data) = Self::parse_ciphertext(ciphertext)?;
+        // Parse ciphertext format: egide:v{version}:{base64} (or the explicit
+        // egide:v{version}:{algorithm}:{base64} form).
+        let (version, ciphertext_key_type, data) = Self::parse_ciphertext(ciphertext)?;
+
+        // Compared against the engine's effective algorithm, not the key's
+        // declared type: a key created under a type accepted but never
+        // implemented by an earlier release (chacha20-poly1305 in 0.1.0) was
+        // always encrypted under this algorithm regardless, so its
+        // ciphertexts must stay decryptable. A ciphertext claiming any other
+        // algorithm would be decrypted under the wrong cipher; refuse rather
+        // than guess.
+        if ciphertext_key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::CiphertextAlgorithmMismatch {
+                expected: ENGINE_ALGORITHM,
+                found: ciphertext_key_type,
+            });
+        }
 
         if version < key.min_decryption_version {
             return Err(TransitError::VersionBelowMinDecryption {
@@ -873,11 +944,28 @@ impl TransitEngine {
         Ok(decrypted.to_vec())
     }
 
-    /// Parses the ciphertext format and extracts version and raw data.
-    fn parse_ciphertext(ciphertext: &str) -> Result<(u32, Vec<u8>), TransitError> {
-        let parts: Vec<&str> = ciphertext.splitn(3, ':').collect();
+    /// Formats a ciphertext envelope.
+    ///
+    /// AES-256-GCM keeps the historical short form `egide:v{n}:{b64}`, which
+    /// is normatively defined as AES-256-GCM. Any other algorithm uses the
+    /// explicit form `egide:v{n}:{alg}:{b64}` so the ciphertext is never
+    /// ambiguous.
+    fn format_ciphertext(version: u32, key_type: KeyType, data: &[u8]) -> String {
+        let encoded = BASE64.encode(data);
+        match key_type {
+            KeyType::Aes256Gcm => format!("egide:v{version}:{encoded}"),
+            other @ KeyType::ChaCha20Poly1305 => format!("egide:v{version}:{other}:{encoded}"),
+        }
+    }
 
-        if parts.len() != 3 || parts[0] != "egide" {
+    /// Parses a ciphertext envelope in either the short or the explicit form.
+    ///
+    /// The short form omits the algorithm and means AES-256-GCM. The base64
+    /// alphabet excludes `:`, so counting the segments is unambiguous.
+    fn parse_ciphertext(ciphertext: &str) -> Result<(u32, KeyType, Vec<u8>), TransitError> {
+        let parts: Vec<&str> = ciphertext.splitn(4, ':').collect();
+
+        if parts.len() < 3 || parts[0] != "egide" {
             return Err(TransitError::InvalidCiphertext);
         }
 
@@ -888,11 +976,28 @@ impl TransitEngine {
             .parse()
             .map_err(|_| TransitError::InvalidCiphertext)?;
 
+        let (key_type, encoded) = if parts.len() == 3 {
+            (KeyType::Aes256Gcm, parts[2])
+        } else {
+            // An unparsable label means the ciphertext itself is malformed,
+            // not that the caller named a "key type": do not propagate
+            // `parts[2]` into the error. It is caller-controlled and
+            // unbounded (everything before the 4th `:` in a `splitn(4, ':')`),
+            // so reflecting it would let an attacker put arbitrary-length
+            // data into error responses and logs.
+            (
+                parts[2]
+                    .parse::<KeyType>()
+                    .map_err(|_| TransitError::InvalidCiphertext)?,
+                parts[3],
+            )
+        };
+
         let data = BASE64
-            .decode(parts[2])
+            .decode(encoded)
             .map_err(|_| TransitError::InvalidCiphertext)?;
 
-        Ok((version, data))
+        Ok((version, key_type, data))
     }
 
     /// Rewraps ciphertext with the latest key version.
@@ -902,7 +1007,20 @@ impl TransitEngine {
         let key = self.get_key(name).await?;
 
         // Parse to get current version
-        let (current_version, _) = Self::parse_ciphertext(ciphertext)?;
+        let (current_version, ciphertext_key_type, _data) = Self::parse_ciphertext(ciphertext)?;
+
+        // Compared against the engine's effective algorithm, not the key's
+        // declared type, for the same reason as in decrypt: a legacy key
+        // declared under a never-implemented type must still rewrap. A
+        // ciphertext claiming any other algorithm is refused rather than
+        // guessed, even on the already-latest-version fast path below that
+        // never calls decrypt.
+        if ciphertext_key_type != ENGINE_ALGORITHM {
+            return Err(TransitError::CiphertextAlgorithmMismatch {
+                expected: ENGINE_ALGORITHM,
+                found: ciphertext_key_type,
+            });
+        }
 
         // If already at latest version, return as-is
         if current_version == key.latest_version {
@@ -1019,6 +1137,29 @@ mod tests {
 
         let retrieved = engine.get_key("my-key").await.unwrap();
         assert_eq!(retrieved.name, "my-key");
+    }
+
+    #[tokio::test]
+    async fn test_create_key_rejects_unimplemented_key_type() {
+        let (_tmp, engine) = setup().await;
+
+        let config = KeyConfig {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..KeyConfig::default()
+        };
+        let result = engine.create_key("unsupported", config).await;
+
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::UnsupportedKeyType(KeyType::ChaCha20Poly1305))
+            ),
+            "an unimplemented key type must be rejected, got {result:?}"
+        );
+
+        // The rejection must happen before any row is written.
+        let lookup = engine.get_key("unsupported").await;
+        assert!(matches!(lookup, Err(TransitError::KeyNotFound(_))));
     }
 
     #[tokio::test]
@@ -1559,6 +1700,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rewrap_rejects_algorithm_mismatch_at_latest_version() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("rewrap-mismatch", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // No rotation: the ciphertext's version is already the key's latest.
+        let short = engine.encrypt("rewrap-mismatch", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let forged = format!("egide:v1:chacha20-poly1305:{body}");
+
+        let result = engine.rewrap("rewrap-mismatch", &forged).await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::CiphertextAlgorithmMismatch {
+                    expected: KeyType::Aes256Gcm,
+                    found: KeyType::ChaCha20Poly1305,
+                })
+            ),
+            "a forged ciphertext claiming another algorithm must not be returned \
+             as-is through the already-latest-version fast path, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_multiple_rotations() {
         let (_tmp, engine) = setup().await;
         engine
@@ -2075,6 +2243,259 @@ mod tests {
                 .unwrap()
                 .min_decryption_version,
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_short_form_ciphertext_stays_decryptable() {
+        let (_tmp, engine) = setup().await;
+        engine.create_key("legacy", KeyConfig::new()).await.unwrap();
+
+        // The short form is what v0.1.0 produced. It must keep round-tripping.
+        let ciphertext = engine.encrypt("legacy", b"payload").await.unwrap();
+        assert!(
+            ciphertext.starts_with("egide:v1:"),
+            "AES-256-GCM must keep emitting the short form, got {ciphertext}"
+        );
+        assert_eq!(
+            ciphertext.matches(':').count(),
+            2,
+            "the short form carries exactly two separators"
+        );
+
+        let plaintext = engine.decrypt("legacy", &ciphertext).await.unwrap();
+        assert_eq!(plaintext, b"payload");
+    }
+
+    #[tokio::test]
+    async fn test_long_form_ciphertext_is_accepted() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("explicit", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let short = engine.encrypt("explicit", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let long = format!("egide:v1:aes256-gcm:{body}");
+
+        let plaintext = engine.decrypt("explicit", &long).await.unwrap();
+        assert_eq!(plaintext, b"payload");
+    }
+
+    #[tokio::test]
+    async fn test_ciphertext_algorithm_mismatch_fails_closed() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("mismatch", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let short = engine.encrypt("mismatch", b"payload").await.unwrap();
+        let body = short.strip_prefix("egide:v1:").unwrap();
+        let forged = format!("egide:v1:chacha20-poly1305:{body}");
+
+        let result = engine.decrypt("mismatch", &forged).await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::CiphertextAlgorithmMismatch {
+                    expected: KeyType::Aes256Gcm,
+                    found: KeyType::ChaCha20Poly1305,
+                })
+            ),
+            "a ciphertext claiming another algorithm must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unknown_algorithm_label_is_rejected() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("unknown-alg", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let result = engine.decrypt("unknown-alg", "egide:v1:rot13:AAAA").await;
+        assert!(matches!(result, Err(TransitError::InvalidCiphertext)));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_algorithm_label_is_not_reflected_in_error() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("unknown-alg-reflect", KeyConfig::new())
+            .await
+            .unwrap();
+
+        // An arbitrary-length attacker-controlled label must not be echoed
+        // back: the error is about the ciphertext shape, not the label text.
+        let long_label = "x".repeat(10_000);
+        let forged = format!("egide:v1:{long_label}:AAAA");
+
+        let result = engine.decrypt("unknown-alg-reflect", &forged).await;
+        assert!(matches!(result, Err(TransitError::InvalidCiphertext)));
+
+        let message = result.unwrap_err().to_string();
+        assert!(
+            !message.contains(&long_label),
+            "error message must not reflect the caller-supplied algorithm label"
+        );
+        assert!(
+            message.len() < 200,
+            "error message must stay bounded regardless of input size, got {} bytes",
+            message.len()
+        );
+    }
+
+    // ========================================================================
+    // Legacy chacha20-poly1305 Key Type Tests
+    //
+    // 0.1.0 accepted chacha20-poly1305 at key creation, persisted that
+    // declared type, and encrypted under AES-256-GCM regardless, emitting the
+    // short ciphertext form. create_key now refuses that type outright, so a
+    // legacy row is simulated directly: the key_type column is rewritten and
+    // the policy-row MAC recomputed over the rewritten row, exactly as the
+    // historical 0.1.0 write path would have produced it. A plain UPDATE of
+    // key_type alone would leave a stale MAC and fail every read with
+    // TransitError::Integrity before the algorithm question is even reached.
+    // ========================================================================
+
+    #[tokio::test]
+    async fn legacy_chacha20_declared_key_decrypts_short_form_ciphertext() {
+        let (_tmp, engine) = setup().await;
+
+        let key = engine
+            .create_key("legacy-chacha", KeyConfig::new())
+            .await
+            .unwrap();
+        let ciphertext = engine
+            .encrypt("legacy-chacha", b"legacy-payload")
+            .await
+            .unwrap();
+        assert!(ciphertext.starts_with("egide:v1:"));
+
+        let legacy = TransitKey {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..key
+        };
+        let legacy_mac = engine.policy_mac(&legacy).unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ?, row_mac = ? WHERE name = ?",
+                &["chacha20-poly1305", &legacy_mac, "legacy-chacha"],
+            )
+            .await
+            .unwrap();
+
+        // The declared type is now the never-implemented ChaCha20-Poly1305,
+        // but the ciphertext bytes are (and always were) AES-256-GCM.
+        // Refusing to read it back would make production data permanently
+        // inaccessible.
+        let decrypted = engine.decrypt("legacy-chacha", &ciphertext).await.unwrap();
+        assert_eq!(decrypted, b"legacy-payload");
+    }
+
+    #[tokio::test]
+    async fn legacy_chacha20_declared_key_refuses_new_encryption() {
+        let (_tmp, engine) = setup().await;
+
+        let key = engine
+            .create_key("legacy-chacha-enc", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let legacy = TransitKey {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..key
+        };
+        let legacy_mac = engine.policy_mac(&legacy).unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ?, row_mac = ? WHERE name = ?",
+                &["chacha20-poly1305", &legacy_mac, "legacy-chacha-enc"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.encrypt("legacy-chacha-enc", b"new-data").await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::KeyAlgorithmNotImplemented(
+                    KeyType::ChaCha20Poly1305
+                ))
+            ),
+            "a legacy key declared chacha20-poly1305 must refuse new encryption \
+             rather than emit a mislabeled ciphertext, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_chacha20_declared_key_refuses_rotation() {
+        let (_tmp, engine) = setup().await;
+
+        let key = engine
+            .create_key("legacy-chacha-rotate", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let legacy = TransitKey {
+            key_type: KeyType::ChaCha20Poly1305,
+            ..key
+        };
+        let legacy_mac = engine.policy_mac(&legacy).unwrap();
+        engine
+            .storage
+            .execute(
+                "UPDATE transit_keys SET key_type = ?, row_mac = ? WHERE name = ?",
+                &["chacha20-poly1305", &legacy_mac, "legacy-chacha-rotate"],
+            )
+            .await
+            .unwrap();
+
+        let result = engine.rotate_key("legacy-chacha-rotate").await;
+        assert!(
+            matches!(
+                result,
+                Err(TransitError::KeyAlgorithmNotImplemented(
+                    KeyType::ChaCha20Poly1305
+                ))
+            ),
+            "rotating a legacy key declared under a never-implemented \
+             algorithm must fail, since the new version could never encrypt \
+             anything, got {result:?}"
+        );
+
+        // The rejection must happen before any new version row is written.
+        let versions = engine.list_versions("legacy-chacha-rotate").await.unwrap();
+        assert_eq!(
+            versions.len(),
+            1,
+            "rotation must not persist a new version on rejection"
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypt_always_emits_short_form_ciphertext() {
+        let (_tmp, engine) = setup().await;
+        engine
+            .create_key("short-form-only", KeyConfig::new())
+            .await
+            .unwrap();
+
+        let ciphertext = engine.encrypt("short-form-only", b"data").await.unwrap();
+
+        assert!(
+            ciphertext.starts_with("egide:v1:"),
+            "encrypt must emit the short form, got {ciphertext}"
+        );
+        assert_eq!(
+            ciphertext.matches(':').count(),
+            2,
+            "the short form carries exactly two separators, got {ciphertext}"
         );
     }
 

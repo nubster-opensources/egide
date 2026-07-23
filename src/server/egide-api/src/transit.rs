@@ -24,29 +24,41 @@ use crate::{ServiceContext, ServiceError};
 /// | `TransitError`                                              | `ServiceError`            |
 /// |-------------------------------------------------------------|---------------------------|
 /// | `KeyNotFound` / `VersionNotFound`                           | `NotFound`                |
-/// | `KeyExists`                                                 | `Conflict`                |
-/// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` / | `BadRequest`              |
-/// | `VersionBelowMinEncryption` / `VersionBelowMinDecryption`   |                           |
+/// | `KeyExists`                                                  | `Conflict("key already exists")` |
+/// | `KeyAlgorithmNotImplemented`                                | `Conflict("key declares an algorithm this build does not implement")` |
+/// | `InvalidCiphertext` / `InvalidKeyName` / `InvalidKeyType` /  | `BadRequest`              |
+/// | `UnsupportedKeyType` / `VersionBelowMinEncryption` /         |                           |
+/// | `VersionBelowMinDecryption` / `CiphertextAlgorithmMismatch`  |                           |
 /// | `DecryptionFailed`                                          | `DecryptionFailed`        |
 /// | `OperationNotAllowed` / `NotExportable` / `DeletionNotAllowed` | `Forbidden`            |
 /// | `Storage` / `Crypto` / `Integrity` / `Clock`                | `Internal`                |
+/// | any future variant (the enum is `#[non_exhaustive]`)        | `Internal`                |
 fn map_transit_error(err: TransitError) -> ServiceError {
     match err {
         TransitError::KeyNotFound(_) | TransitError::VersionNotFound { .. } => {
             ServiceError::NotFound
         },
-        TransitError::KeyExists(_) => ServiceError::Conflict,
+        TransitError::KeyExists(_) => ServiceError::Conflict("key already exists".into()),
+        TransitError::KeyAlgorithmNotImplemented(_) => {
+            ServiceError::Conflict("key declares an algorithm this build does not implement".into())
+        },
         TransitError::InvalidCiphertext => {
             ServiceError::BadRequest("invalid ciphertext format".into())
         },
         TransitError::InvalidKeyName(msg) | TransitError::InvalidKeyType(msg) => {
             ServiceError::BadRequest(msg)
         },
+        TransitError::UnsupportedKeyType(key_type) => {
+            ServiceError::BadRequest(format!("unsupported key type: {key_type}"))
+        },
         TransitError::VersionBelowMinEncryption { version, min } => ServiceError::BadRequest(
             format!("key version {version} is below min_encryption_version {min}"),
         ),
         TransitError::VersionBelowMinDecryption { version, min } => ServiceError::BadRequest(
             format!("key version {version} is below min_decryption_version {min}"),
+        ),
+        TransitError::CiphertextAlgorithmMismatch { expected, found } => ServiceError::BadRequest(
+            format!("ciphertext algorithm {found} does not match engine algorithm {expected}"),
         ),
         TransitError::DecryptionFailed => ServiceError::DecryptionFailed,
         TransitError::OperationNotAllowed(msg)
@@ -56,6 +68,10 @@ fn map_transit_error(err: TransitError) -> ServiceError {
             ServiceError::Internal(msg)
         },
         TransitError::Clock => ServiceError::Internal("transit clock error".into()),
+        // TransitError is #[non_exhaustive]: a future patch release may add a
+        // variant without a major version bump. Fail closed to Internal
+        // rather than fail to compile.
+        _ => ServiceError::Internal("unrecognized transit error".into()),
     }
 }
 
@@ -83,7 +99,8 @@ impl ServiceContext {
     ///
     /// Authorization: root-only. Returns [`ServiceError::Forbidden`] for non-root callers.
     /// Returns [`ServiceError::Sealed`] if the vault is sealed.
-    /// Returns [`ServiceError::Conflict`] if a key with the same name already exists.
+    /// Returns [`ServiceError::Conflict`] with detail `"key already exists"` if
+    /// a key with the same name already exists.
     /// Returns [`ServiceError::BadRequest`] if `key_type` is not a recognized key type.
     ///
     /// If `key_type` is empty or blank, it defaults to `"aes256-gcm"`. This
@@ -346,7 +363,7 @@ mod tests {
             .create_key(&AuthContext::root(), "dup", "aes256-gcm", false)
             .await
             .unwrap_err();
-        assert!(matches!(err, crate::ServiceError::Conflict));
+        assert!(matches!(err, crate::ServiceError::Conflict(_)));
     }
 
     // ---- BadRequest tests ------------------------------------------------
@@ -424,21 +441,60 @@ mod tests {
         assert_eq!(recovered, plaintext);
     }
 
+    #[test]
+    fn key_algorithm_not_implemented_maps_to_conflict() {
+        // A key persisted under an algorithm this build does not implement
+        // is a server-side state problem, not a malformed request: it must
+        // map to Conflict (409), not BadRequest (400).
+        let err = map_transit_error(TransitError::KeyAlgorithmNotImplemented(
+            KeyType::ChaCha20Poly1305,
+        ));
+        assert!(
+            matches!(err, crate::ServiceError::Conflict(_)),
+            "expected Conflict for a legacy key's unimplemented algorithm, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn key_exists_and_key_algorithm_not_implemented_carry_distinct_details() {
+        // The whole point of carrying a detail on Conflict is that these two
+        // causes, both mapped to HTTP 409, must no longer be indistinguishable.
+        let exists_err = map_transit_error(TransitError::KeyExists("dup".into()));
+        let unimplemented_err = map_transit_error(TransitError::KeyAlgorithmNotImplemented(
+            KeyType::ChaCha20Poly1305,
+        ));
+        let (
+            crate::ServiceError::Conflict(exists_detail),
+            crate::ServiceError::Conflict(unimplemented_detail),
+        ) = (exists_err, unimplemented_err)
+        else {
+            panic!("expected both errors to map to ServiceError::Conflict");
+        };
+        assert_ne!(
+            exists_detail, unimplemented_detail,
+            "KeyExists and KeyAlgorithmNotImplemented must carry distinct 409 details"
+        );
+    }
+
     #[tokio::test]
-    async fn encrypt_decrypt_chacha20() {
+    async fn create_key_chacha20_is_rejected_as_unsupported() {
+        // ChaCha20-Poly1305 is accepted by the wire format but not implemented
+        // by the engine: creation must fail closed instead of silently
+        // encrypting under AES-256-GCM.
         let (_t, c) = crate::test_support::unsealed_context().await;
-        c.create_key(
-            &AuthContext::root(),
-            "chacha-key",
-            "chacha20-poly1305",
-            false,
-        )
-        .await
-        .unwrap();
-        let plaintext = b"chacha20 secret data";
-        let ct = c.encrypt("chacha-key", plaintext).await.unwrap();
-        let recovered = c.decrypt("chacha-key", &ct).await.unwrap();
-        assert_eq!(recovered, plaintext);
+        let err = c
+            .create_key(
+                &AuthContext::root(),
+                "chacha-key",
+                "chacha20-poly1305",
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::ServiceError::BadRequest(_)),
+            "expected BadRequest for unsupported key type, got {err:?}"
+        );
     }
 
     #[tokio::test]

@@ -3,7 +3,13 @@
 use thiserror::Error;
 
 /// Errors that can occur in the Transit Engine.
+///
+/// Marked `#[non_exhaustive]`: this crate is published, and a future patch
+/// may need to add a variant (for example a new security-relevant failure
+/// mode) without forcing a major version bump on every downstream consumer
+/// that matches on this enum.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransitError {
     /// Key not found.
     #[error("key not found: {0}")]
@@ -59,6 +65,31 @@ pub enum TransitError {
     /// Invalid key type.
     #[error("invalid key type: {0}")]
     InvalidKeyType(String),
+
+    /// Key type accepted by the API but not implemented by this build.
+    #[error("unsupported key type: {0}")]
+    UnsupportedKeyType(crate::KeyType),
+
+    /// A persisted key declares an algorithm this build does not implement.
+    ///
+    /// Unlike [`TransitError::UnsupportedKeyType`], which rejects a type the
+    /// caller is requesting right now, this variant means the request itself
+    /// is well-formed: the problem is server-side state, a key row written
+    /// under a type this build never actually implemented (for example
+    /// `chacha20-poly1305` on a key created by an earlier release). Retrying
+    /// the same request cannot succeed; the key must be rotated onto an
+    /// implemented algorithm or replaced.
+    #[error("key algorithm not implemented: the persisted key declares {0}, which this build does not implement")]
+    KeyAlgorithmNotImplemented(crate::KeyType),
+
+    /// Ciphertext declares an algorithm the engine does not implement.
+    #[error("ciphertext algorithm {found} does not match engine algorithm {expected}")]
+    CiphertextAlgorithmMismatch {
+        /// Algorithm the engine actually implements.
+        expected: crate::KeyType,
+        /// Algorithm declared by the ciphertext.
+        found: crate::KeyType,
+    },
 
     /// Key is not exportable.
     #[error("key is not exportable: {0}")]

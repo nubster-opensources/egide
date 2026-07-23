@@ -27,7 +27,7 @@ POST /v1/transit/keys
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `name` | string | Key name (required) |
-| `type` | string | `aes256-gcm` (default) or `chacha20-poly1305` |
+| `type` | string | `aes256-gcm` (default; the only type implemented). Sending `chacha20-poly1305` returns `400` instead of `201`: the type is a recognized enum value but is not implemented by this build. |
 | `deletion_allowed` | boolean | Whether the key may later be deleted (default: false) |
 
 ### Response
@@ -257,11 +257,11 @@ Errors are RFC 9457 `application/problem+json`:
 
 | Code | Description |
 |------|-------------|
-| `400` | Invalid base64 plaintext, malformed ciphertext, version below minimum, decryption failed (anti-oracle: no distinction between wrong key and corrupted data) |
+| `400` | Invalid base64 plaintext, malformed ciphertext, version below minimum, decryption failed (anti-oracle: no distinction between wrong key and corrupted data), `type` at key creation is a recognized value this build does not implement (`chacha20-poly1305`), or a ciphertext declares an algorithm that does not match the engine's implemented algorithm |
 | `401` | Missing or invalid bearer token |
 | `403` | Non-root caller on key management, or deletion not allowed for the key |
 | `404` | Key or key version not found |
-| `409` | Key with the same name already exists |
+| `409` | Key with the same name already exists, or the key declares an algorithm this build does not implement and the operation would produce a new ciphertext or key version (`encrypt`, `generate_datakey`, `rotate_key`, or `rewrap` of a ciphertext not already at the key's latest version) |
 | `503` | Vault is sealed |
 
 ## Next Steps

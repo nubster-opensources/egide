@@ -10,9 +10,11 @@ pub enum ServiceError {
     /// Requested resource does not exist.
     #[error("not found")]
     NotFound,
-    /// Resource already exists.
-    #[error("conflict")]
-    Conflict,
+    /// A conflict with the current server state (not limited to resource
+    /// creation). The detail string names the exact cause: an existing
+    /// resource, a stale version, or a state the request cannot reconcile with.
+    #[error("conflict: {0}")]
+    Conflict(String),
     /// Invalid input (bad base64, empty field, malformed argument).
     #[error("bad request: {0}")]
     BadRequest(String),
