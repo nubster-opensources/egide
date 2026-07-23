@@ -279,35 +279,37 @@ impl StorageBackend for SqliteBackend {
     async fn put(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
         let now = Self::now();
 
-        let existing: Option<(i64,)> = sqlx::query_as("SELECT version FROM kv_store WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
+        // BEGIN IMMEDIATE takes the write lock up front. A deferred
+        // transaction promoted to a writer later would race and surface as
+        // SQLITE_BUSY under contention.
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
-        let (version, operation) = match existing {
-            Some((v,)) => (v + 1, "update"),
-            None => (1, "create"),
-        };
-
-        sqlx::query(
+        // The database owns the version counter. Computing it in a prior
+        // SELECT would leave a window for a concurrent writer to reuse it.
+        let (version,): (i64,) = sqlx::query_as(
             r"
             INSERT INTO kv_store (key, value, version, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, 1, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
-                version = excluded.version,
+                version = kv_store.version + 1,
                 updated_at = excluded.updated_at
+            RETURNING version
             ",
         )
         .bind(key)
         .bind(value)
-        .bind(version)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .fetch_one(&mut *transaction)
         .await
         .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+
+        let operation = if version == 1 { "create" } else { "update" };
 
         sqlx::query(
             "INSERT INTO kv_history (key, value, version, operation, actor, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -318,29 +320,35 @@ impl StorageBackend for SqliteBackend {
         .bind(operation)
         .bind(self.actor.as_deref())
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
-        let existing: Option<(i64,)> = sqlx::query_as("SELECT version FROM kv_store WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
+        let now = Self::now();
+
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
-        if let Some((version,)) = existing {
-            let now = Self::now();
-
-            sqlx::query("DELETE FROM kv_store WHERE key = ?")
+        let deleted: Option<(i64,)> =
+            sqlx::query_as("DELETE FROM kv_store WHERE key = ? RETURNING version")
                 .bind(key)
-                .execute(&self.pool)
+                .fetch_optional(&mut *transaction)
                 .await
                 .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
+        if let Some((version,)) = deleted {
             sqlx::query(
                 "INSERT INTO kv_history (key, value, version, operation, actor, timestamp) VALUES (?, NULL, ?, 'delete', ?, ?)",
             )
@@ -348,10 +356,15 @@ impl StorageBackend for SqliteBackend {
             .bind(version + 1)
             .bind(self.actor.as_deref())
             .bind(now)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await
             .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
         }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|e| StorageError::QueryFailed(e.to_string()))?;
 
         Ok(())
     }
@@ -646,6 +659,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, vec![(1, "a".to_string()), (2, "b".to_string())]);
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::items_after_statements,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    async fn test_concurrent_puts_on_a_fresh_key_yield_distinct_versions() {
+        let (_tmp, backend) = setup().await;
+        let backend = std::sync::Arc::new(backend);
+
+        const WRITERS: usize = 8;
+        let mut handles = Vec::with_capacity(WRITERS);
+        for index in 0..WRITERS {
+            let backend = std::sync::Arc::clone(&backend);
+            handles.push(tokio::spawn(async move {
+                backend.put("contended", &[index as u8]).await
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        let versions: Vec<(i64,)> =
+            sqlx::query_as("SELECT version FROM kv_history WHERE key = ? ORDER BY version")
+                .bind("contended")
+                .fetch_all(&backend.pool)
+                .await
+                .unwrap();
+
+        let observed: Vec<i64> = versions.into_iter().map(|(v,)| v).collect();
+        assert_eq!(
+            observed,
+            (1..=WRITERS as i64).collect::<Vec<_>>(),
+            "each concurrent writer must land on its own version"
+        );
     }
 
     #[tokio::test]
