@@ -112,7 +112,7 @@ Configure health checks for your load balancer:
 
 ### Logging
 
-Egide logs to stdout using `tracing`, controlled by the standard `RUST_LOG` environment variable (for example `RUST_LOG=info,egide=debug`, which is also the built-in default). There is no `[logging]` configuration section or output-file setting: redirect stdout or capture it with your container runtime / process supervisor, and ship it to your log aggregation system (ELK, Loki, etc.).
+Egide logs to stderr using `tracing`, controlled by the standard `RUST_LOG` environment variable (for example `RUST_LOG=info,egide=debug`, which is also the built-in default). There is no `[logging]` configuration section or output-file setting: redirect stderr or capture it with your container runtime / process supervisor, and ship it to your log aggregation system (ELK, Loki, etc.). Stdout carries a single startup line, `EGIDE_LISTEN_ADDR=<ip>:<port>`, the actual bound listen address, useful when the port is ephemeral.
 
 ### Alerts
 

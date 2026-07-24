@@ -157,7 +157,7 @@ impl TestServer {
             .arg("--grpc-bind")
             .arg("127.0.0.1:0")
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()
             .context("Failed to start server")?;
@@ -671,7 +671,7 @@ mod tests {
             .arg("127.0.0.1:0")
             .env("EGIDE_UNSAFE_DEV_MODE", "1")
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()
             .unwrap();
