@@ -139,7 +139,7 @@ Today, authorization is a binary root/non-root distinction: administrative opera
 
 ## Audit Logging
 
-> **Status: planned for 0.2.0, not implemented yet.** An append-only, HMAC-signed audit log recording every request (timestamp, identity, path, method, status, with sensitive data redacted) is on the roadmap. Today, `tracing` request logs on stdout are the only operational log output; they are not tamper-evident.
+> **Status: planned for 0.2.0, not implemented yet.** An append-only, HMAC-signed audit log recording every request (timestamp, identity, path, method, status, with sensitive data redacted) is on the roadmap. Today, `tracing` request logs on stderr are the only operational log output; they are not tamper-evident.
 
 ## Network Security
 

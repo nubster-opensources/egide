@@ -6,12 +6,20 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::net::SocketAddr;
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::process::Command;
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use tempfile::TempDir;
 
 // ============================================================================
@@ -107,67 +115,89 @@ pub struct SealResponse {
 // ============================================================================
 
 /// A test server instance that manages its own data directory and process.
+///
+/// Only available under `cfg(test)`: it is built through `server_binary()`,
+/// which links `escargot` (a dev-dependency, unavailable in a plain library
+/// build).
+#[cfg(test)]
 pub struct TestServer {
-    process: Child,
-    /// Base URL of the running server (e.g. `http://127.0.0.1:18200`).
+    _process: tokio::process::Child,
+    /// Base URL of the running server (e.g. `http://127.0.0.1:53312`).
     pub base_url: String,
     /// TCP port the server is listening on.
     pub port: u16,
     _data_dir: TempDir,
 }
 
+#[cfg(test)]
 impl TestServer {
-    /// Start a new test server on the specified port.
-    pub async fn start(port: u16) -> Result<Self> {
+    /// Start a dev-mode server (auto-init and auto-unseal), ready to serve.
+    pub async fn start_dev() -> Result<Self> {
+        Self::spawn(true).await
+    }
+
+    /// Start a server without dev mode, for the explicit init/unseal flow.
+    pub async fn start_manual() -> Result<Self> {
+        Self::spawn(false).await
+    }
+
+    async fn spawn(dev: bool) -> Result<Self> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
         let data_dir = TempDir::new().context("Failed to create temp dir")?;
-
-        // Find the server binary
-        let server_binary = find_server_binary()?;
-
-        let process = Command::new(&server_binary)
-            .arg("--dev")
+        let mut command = tokio::process::Command::new(server_binary());
+        if dev {
+            command.arg("--dev").env("EGIDE_UNSAFE_DEV_MODE", "1");
+        }
+        let mut process = command
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            // Dev mode now requires an explicit opt-in guard (see egide-seal
-            // `ensure_dev_mode_allowed`). Tests are not production, so they
-            // set it deliberately for the spawned server process.
-            .env("EGIDE_UNSAFE_DEV_MODE", "1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .arg("127.0.0.1:0")
+            .arg("--grpc-bind")
+            .arg("127.0.0.1:0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
             .spawn()
-            .with_context(|| format!("Failed to start server: {}", server_binary.display()))?;
+            .context("Failed to start server")?;
 
-        let base_url = format!("http://127.0.0.1:{port}");
+        let stdout = process.stdout.take().context("child stdout missing")?;
+        let mut reader = BufReader::new(stdout).lines();
+        let addr = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(line) = reader.next_line().await? {
+                if let Some(rest) = line.strip_prefix("EGIDE_LISTEN_ADDR=") {
+                    return Ok::<_, anyhow::Error>(rest.to_string());
+                }
+            }
+            bail!("server exited before announcing its address")
+        })
+        .await
+        .context("timed out waiting for EGIDE_LISTEN_ADDR")??;
 
+        let socket: SocketAddr = addr.parse().context("invalid announced address")?;
+        let base_url = format!("http://{socket}");
         let server = Self {
-            process,
+            _process: process,
             base_url,
-            port,
+            port: socket.port(),
             _data_dir: data_dir,
         };
-
-        // Wait for server to be ready
-        server.wait_for_ready().await?;
-
+        server.wait_for_ready(dev).await?;
         Ok(server)
     }
 
-    /// Wait for the server to be ready to serve requests.
-    ///
-    /// A live `/v1/sys/health` response is not sufficient: in dev mode the
-    /// listener accepts connections while auto-init and auto-unseal are still
-    /// running, leaving a window where health reports `sealed: true`. Tests
-    /// that assert on an unsealed server would flake on that window, so this
-    /// polls until the server is both initialized and unsealed.
-    async fn wait_for_ready(&self) -> Result<()> {
+    /// Wait until the server is reachable. In dev mode, also wait until it is
+    /// initialized and unsealed.
+    async fn wait_for_ready(&self, dev: bool) -> Result<()> {
         let client = Client::new();
         let url = format!("{}/v1/sys/health", self.base_url);
-
         for _ in 0..50 {
             if let Ok(resp) = client.get(&url).send().await {
                 if resp.status().is_success() {
+                    if !dev {
+                        return Ok(());
+                    }
                     if let Ok(health) = resp.json::<HealthResponse>().await {
                         if health.initialized && !health.sealed {
                             return Ok(());
@@ -177,8 +207,7 @@ impl TestServer {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-
-        bail!("Server failed to become initialized and unsealed within 5 seconds")
+        bail!("Server did not become ready within 5 seconds")
     }
 
     /// Get a configured HTTP client for this server.
@@ -188,58 +217,34 @@ impl TestServer {
     }
 }
 
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
-    }
-}
-
-/// Find the server binary in the target directory.
-fn find_server_binary() -> Result<std::path::PathBuf> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-
-    // Try debug build first, then release
-    let candidates = [
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide-server"),
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide-server.exe"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide-server"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide-server.exe"),
-    ];
-
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.canonicalize()?);
-        }
-    }
-
-    bail!(
-        "Could not find egide-server binary. Run 'cargo build -p egide-server' first. Searched in: {candidates:?}"
-    )
-}
-
-/// Find the CLI binary (`egide`) in the target directory.
+/// Builds `egide-server` once and returns the cached binary path.
 #[cfg(test)]
-fn find_cli_binary() -> Result<std::path::PathBuf> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+fn server_binary() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        escargot::CargoBuild::new()
+            .package("egide-server")
+            .bin("egide-server")
+            .run()
+            .expect("failed to build egide-server")
+            .path()
+            .to_path_buf()
+    })
+}
 
-    // Try debug build first, then release
-    let candidates = [
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide"),
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide.exe"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide.exe"),
-    ];
-
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.canonicalize()?);
-        }
-    }
-
-    bail!(
-        "Could not find egide binary. Run 'cargo build -p egide-cli' first. Searched in: {candidates:?}"
-    )
+/// Builds `egide` (the CLI) once and returns the cached binary path.
+#[cfg(test)]
+fn cli_binary() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        escargot::CargoBuild::new()
+            .package("egide-cli")
+            .bin("egide")
+            .run()
+            .expect("failed to build egide")
+            .path()
+            .to_path_buf()
+    })
 }
 
 // ============================================================================
@@ -429,18 +434,27 @@ impl EgideClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU16, Ordering};
 
-    // Port counter to avoid conflicts between parallel tests
-    static PORT_COUNTER: AtomicU16 = AtomicU16::new(18200);
+    #[tokio::test]
+    async fn dev_fixture_is_ready_and_unique_port() {
+        let a = TestServer::start_dev().await.unwrap();
+        let b = TestServer::start_dev().await.unwrap();
+        assert_ne!(
+            a.port, b.port,
+            "each dev server must bind a distinct ephemeral port"
+        );
+        assert!(a.client().health().await.unwrap().initialized);
+    }
 
-    fn next_port() -> u16 {
-        PORT_COUNTER.fetch_add(1, Ordering::SeqCst)
+    #[test]
+    fn server_binary_is_built_and_exists() {
+        let path = server_binary();
+        assert!(path.exists(), "server binary should exist at {path:?}");
     }
 
     #[tokio::test]
     async fn test_server_health_in_dev_mode() {
-        let server = TestServer::start(next_port()).await.unwrap();
+        let server = TestServer::start_dev().await.unwrap();
         let client = server.client();
 
         let health = client.health().await.unwrap();
@@ -452,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_secrets_workflow() {
-        let server = TestServer::start(next_port()).await.unwrap();
+        let server = TestServer::start_dev().await.unwrap();
 
         // In dev mode, we need to get the root token from the server logs
         // For now, we'll use the dev mode behavior where it's already unsealed
@@ -472,38 +486,11 @@ mod tests {
     #[tokio::test]
     async fn test_complete_lifecycle_manual_init() {
         // Start server without dev mode to test full init flow
-        let port = next_port();
-        let data_dir = TempDir::new().unwrap();
-
-        let server_binary = find_server_binary().unwrap();
-
-        let mut process = Command::new(&server_binary)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let base_url = format!("http://127.0.0.1:{port}");
-        let client = EgideClient::new(&base_url);
-
-        // Wait for server to be ready (robust wait with retries)
-        let mut health = None;
-        for _ in 0..50 {
-            match client.health().await {
-                Ok(h) => {
-                    health = Some(h);
-                    break;
-                },
-                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
-            }
-        }
+        let server = TestServer::start_manual().await.unwrap();
+        let client = server.client();
 
         // 1. Check initial state - should be uninitialized
-        let health = health.expect("Server failed to start within 5 seconds");
+        let health = client.health().await.unwrap();
         assert!(!health.initialized, "Should not be initialized yet");
         assert!(health.sealed, "Should be sealed");
 
@@ -570,15 +557,11 @@ mod tests {
         // 13. Verify deleted (should fail)
         let result = client.secret_get("myapp/database").await;
         assert!(result.is_err());
-
-        // Cleanup
-        let _ = process.kill();
-        let _ = process.wait();
     }
 
     #[tokio::test]
     async fn test_authentication_required() {
-        let server = TestServer::start(next_port()).await.unwrap();
+        let server = TestServer::start_dev().await.unwrap();
         let client = server.client(); // No token
 
         // Try to list secrets without token - should fail
@@ -588,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_token_rejected() {
-        let server = TestServer::start(next_port()).await.unwrap();
+        let server = TestServer::start_dev().await.unwrap();
         let client = server.client().with_token("invalid-token");
 
         // Try to list secrets with invalid token - should fail
@@ -607,30 +590,8 @@ mod tests {
     /// is applied to `seal_handler`.
     #[tokio::test]
     async fn test_seal_requires_token_missing_returns_401() {
-        let port = next_port();
-        let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
-
-        let mut process = std::process::Command::new(&server_binary)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let base_url = format!("http://127.0.0.1:{port}");
-        let client = EgideClient::new(&base_url);
-
-        // Wait for server
-        for _ in 0..50 {
-            if client.health().await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let server = TestServer::start_manual().await.unwrap();
+        let client = server.client();
 
         // Initialize and unseal so the vault is in Unsealed state
         let init = client.init(3, 2).await.unwrap();
@@ -643,37 +604,13 @@ mod tests {
             status, 401,
             "seal without token must return 401, got {status}"
         );
-
-        let _ = process.kill();
-        let _ = process.wait();
     }
 
     /// POST /v1/sys/seal with a bogus token must return 401 Unauthorized.
     #[tokio::test]
     async fn test_seal_requires_token_invalid_returns_401() {
-        let port = next_port();
-        let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
-
-        let mut process = std::process::Command::new(&server_binary)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let base_url = format!("http://127.0.0.1:{port}");
-        let client = EgideClient::new(&base_url);
-
-        for _ in 0..50 {
-            if client.health().await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let server = TestServer::start_manual().await.unwrap();
+        let client = server.client();
 
         let init = client.init(3, 2).await.unwrap();
         client.unseal(&init.keys[0]).await.unwrap();
@@ -688,37 +625,13 @@ mod tests {
             status, 401,
             "seal with invalid token must return 401, got {status}"
         );
-
-        let _ = process.kill();
-        let _ = process.wait();
     }
 
     /// POST /v1/sys/seal with a valid root token must return 200 and sealed=true.
     #[tokio::test]
     async fn test_seal_with_root_token_returns_200() {
-        let port = next_port();
-        let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
-
-        let mut process = std::process::Command::new(&server_binary)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let base_url = format!("http://127.0.0.1:{port}");
-        let client = EgideClient::new(&base_url);
-
-        for _ in 0..50 {
-            if client.health().await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let server = TestServer::start_manual().await.unwrap();
+        let client = server.client();
 
         let init = client.init(3, 2).await.unwrap();
         client.unseal(&init.keys[0]).await.unwrap();
@@ -731,15 +644,58 @@ mod tests {
             status, 200,
             "seal with root token must return 200, got {status}"
         );
-
-        let _ = process.kill();
-        let _ = process.wait();
     }
 
     // Note: the 403 case (authenticated but non-root) is deferred.
     // The RootToken backend only issues root contexts, so there is no
     // straightforward way to produce an authenticated non-root token in tests.
     // Coverage: 401 (missing) + 401 (invalid) + 200 (root) are the hard criteria.
+
+    // -------------------------------------------------------------------------
+    // stdout port announcement tests (issue #97)
+    // -------------------------------------------------------------------------
+
+    /// On startup, the server must print exactly one `EGIDE_LISTEN_ADDR=<ip>:<port>`
+    /// line to stdout, carrying the real bound port (not the requested `:0`).
+    #[tokio::test]
+    async fn server_announces_real_port_on_stdout() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let data_dir = TempDir::new().unwrap();
+        let mut child = tokio::process::Command::new(server_binary())
+            .arg("--dev")
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg("127.0.0.1:0")
+            .arg("--grpc-bind")
+            .arg("127.0.0.1:0")
+            .env("EGIDE_UNSAFE_DEV_MODE", "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        let stdout = child.stdout.take().unwrap();
+        let mut lines = BufReader::new(stdout).lines();
+        // Bounded read: if the announcement ever regresses, the child keeps its
+        // stdout open and `next_line` would block forever. The timeout turns
+        // that into a clean, fast failure instead of a hung test.
+        let addr = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(line) = lines.next_line().await.unwrap() {
+                if let Some(rest) = line.strip_prefix("EGIDE_LISTEN_ADDR=") {
+                    return rest.to_string();
+                }
+            }
+            panic!("server closed stdout before announcing EGIDE_LISTEN_ADDR");
+        })
+        .await
+        .expect("timed out waiting for EGIDE_LISTEN_ADDR announcement");
+        assert!(
+            !addr.ends_with(":0"),
+            "announced port must be the real ephemeral port, got {addr}"
+        );
+    }
 
     // -------------------------------------------------------------------------
     // CLI authentication tests (issue #63)
@@ -756,46 +712,21 @@ mod tests {
     /// end to end rather than only the internal header-building code.
     #[tokio::test]
     async fn cli_secrets_roundtrip_authenticates_with_bearer() {
-        let port = next_port();
-        let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
-        let cli_binary = find_cli_binary().unwrap();
-
-        let mut process = Command::new(&server_binary)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let base_url = format!("http://127.0.0.1:{port}");
-        let client = EgideClient::new(&base_url);
-
-        // Wait for the server to be healthy before driving it further.
-        let mut ready = false;
-        for _ in 0..50 {
-            if client.health().await.is_ok() {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "server failed to become healthy within 5 seconds");
+        let cli_binary = cli_binary();
+        let server = TestServer::start_manual().await.unwrap();
+        let client = server.client();
 
         // Initialize and unseal through the REST helpers to obtain a root token.
         let init = client.init(3, 2).await.unwrap();
         client.unseal(&init.keys[0]).await.unwrap();
         client.unseal(&init.keys[1]).await.unwrap();
 
-        let addr = base_url.clone();
+        let addr = server.base_url.clone();
         let token = init.root_token.clone();
 
         // `egide secrets put <path> <key>=<value>` should succeed and
         // authenticate with the root token via EGIDE_TOKEN.
-        let put_output = Command::new(&cli_binary)
+        let put_output = Command::new(cli_binary)
             .arg("secrets")
             .arg("put")
             .arg("cli-roundtrip/config")
@@ -814,7 +745,7 @@ mod tests {
         );
 
         // `egide secrets get <path>` should succeed and return the stored value.
-        let get_output = Command::new(&cli_binary)
+        let get_output = Command::new(cli_binary)
             .arg("secrets")
             .arg("get")
             .arg("cli-roundtrip/config")
@@ -838,8 +769,5 @@ mod tests {
             get_stdout,
             String::from_utf8_lossy(&get_output.stderr)
         );
-
-        let _ = process.kill();
-        let _ = process.wait();
     }
 }

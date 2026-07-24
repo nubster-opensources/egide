@@ -220,7 +220,7 @@ sudo firewall-cmd --reload
 
 ## Log Management
 
-Egide logs to stdout via `tracing`, filtered by `RUST_LOG` (default `info,egide=debug`). Under systemd, stdout is captured by journald automatically:
+Egide logs to stderr via `tracing`, filtered by `RUST_LOG` (default `info,egide=debug`). Under systemd, stderr is captured by journald automatically. Stdout carries a single startup line, `EGIDE_LISTEN_ADDR=<ip>:<port>`, the actual bound listen address, useful when the port is ephemeral:
 
 ```bash
 sudo journalctl -u egide -f

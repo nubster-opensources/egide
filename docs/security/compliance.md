@@ -19,7 +19,7 @@ Every operation that touches Egide produces a structured log entry. The audit lo
 
 > **Status: planned for 0.2.0, not implemented yet.** The append-only, HMAC-signed
 > audit log described below is on the roadmap. Today, `tracing` request logs
-> (stdout, filtered by `RUST_LOG`) are the only operational log output; they are
+> (stderr, filtered by `RUST_LOG`) are the only operational log output; they are
 > not append-only, signed, or exportable through the CLI or API.
 
 Once implemented, the audit log is intended to be:
