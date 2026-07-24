@@ -595,7 +595,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// Runs the server: builds state from the CLI, binds and serves.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,egide=debug".into()),
@@ -662,8 +662,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let grpc_addr: SocketAddr = cli.grpc_bind.parse()?;
 
     let listener = tokio::net::TcpListener::bind(rest_addr).await?;
+    let local_addr = listener.local_addr()?;
 
-    tracing::info!("REST on http://{rest_addr}, gRPC on http://{grpc_addr}");
+    // Machine-readable announcement on stdout, before serving, so a parent
+    // process (integration tests, orchestration) can discover an ephemeral
+    // port. Logs go to stderr, so stdout carries only this line.
+    {
+        use std::io::Write;
+        println!("EGIDE_LISTEN_ADDR={local_addr}");
+        let _ = std::io::stdout().flush();
+    }
+
+    tracing::info!("REST on http://{local_addr}, gRPC on http://{grpc_addr}");
 
     let rest_handle = tokio::spawn(async move {
         axum::serve(listener, app)

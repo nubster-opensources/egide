@@ -744,6 +744,52 @@ mod tests {
     // Coverage: 401 (missing) + 401 (invalid) + 200 (root) are the hard criteria.
 
     // -------------------------------------------------------------------------
+    // stdout port announcement tests (issue #97)
+    // -------------------------------------------------------------------------
+
+    /// On startup, the server must print exactly one `EGIDE_LISTEN_ADDR=<ip>:<port>`
+    /// line to stdout, carrying the real bound port (not the requested `:0`).
+    #[tokio::test]
+    async fn server_announces_real_port_on_stdout() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let data_dir = TempDir::new().unwrap();
+        let mut child = tokio::process::Command::new(server_binary())
+            .arg("--dev")
+            .arg("--data-dir")
+            .arg(data_dir.path())
+            .arg("--bind")
+            .arg("127.0.0.1:0")
+            .arg("--grpc-bind")
+            .arg("127.0.0.1:0")
+            .env("EGIDE_UNSAFE_DEV_MODE", "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        let stdout = child.stdout.take().unwrap();
+        let mut lines = BufReader::new(stdout).lines();
+        // Bounded read: if the announcement ever regresses, the child keeps its
+        // stdout open and `next_line` would block forever. The timeout turns
+        // that into a clean, fast failure instead of a hung test.
+        let addr = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(line) = lines.next_line().await.unwrap() {
+                if let Some(rest) = line.strip_prefix("EGIDE_LISTEN_ADDR=") {
+                    return rest.to_string();
+                }
+            }
+            panic!("server closed stdout before announcing EGIDE_LISTEN_ADDR");
+        })
+        .await
+        .expect("timed out waiting for EGIDE_LISTEN_ADDR announcement");
+        assert!(
+            !addr.ends_with(":0"),
+            "announced port must be the real ephemeral port, got {addr}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // CLI authentication tests (issue #63)
     // -------------------------------------------------------------------------
 
