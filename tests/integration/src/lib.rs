@@ -6,12 +6,18 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::HashMap;
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use tempfile::TempDir;
 
 // ============================================================================
@@ -107,6 +113,11 @@ pub struct SealResponse {
 // ============================================================================
 
 /// A test server instance that manages its own data directory and process.
+///
+/// Only available under `cfg(test)`: it is built through `server_binary()`,
+/// which links `escargot` (a dev-dependency, unavailable in a plain library
+/// build).
+#[cfg(test)]
 pub struct TestServer {
     process: Child,
     /// Base URL of the running server (e.g. `http://127.0.0.1:18200`).
@@ -116,15 +127,16 @@ pub struct TestServer {
     _data_dir: TempDir,
 }
 
+#[cfg(test)]
 impl TestServer {
     /// Start a new test server on the specified port.
     pub async fn start(port: u16) -> Result<Self> {
         let data_dir = TempDir::new().context("Failed to create temp dir")?;
 
         // Find the server binary
-        let server_binary = find_server_binary()?;
+        let server_binary = server_binary();
 
-        let process = Command::new(&server_binary)
+        let process = Command::new(server_binary)
             .arg("--dev")
             .arg("--data-dir")
             .arg(data_dir.path())
@@ -188,6 +200,7 @@ impl TestServer {
     }
 }
 
+#[cfg(test)]
 impl Drop for TestServer {
     fn drop(&mut self) {
         let _ = self.process.kill();
@@ -195,51 +208,34 @@ impl Drop for TestServer {
     }
 }
 
-/// Find the server binary in the target directory.
-fn find_server_binary() -> Result<std::path::PathBuf> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-
-    // Try debug build first, then release
-    let candidates = [
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide-server"),
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide-server.exe"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide-server"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide-server.exe"),
-    ];
-
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.canonicalize()?);
-        }
-    }
-
-    bail!(
-        "Could not find egide-server binary. Run 'cargo build -p egide-server' first. Searched in: {candidates:?}"
-    )
+/// Builds `egide-server` once and returns the cached binary path.
+#[cfg(test)]
+fn server_binary() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        escargot::CargoBuild::new()
+            .package("egide-server")
+            .bin("egide-server")
+            .run()
+            .expect("failed to build egide-server")
+            .path()
+            .to_path_buf()
+    })
 }
 
-/// Find the CLI binary (`egide`) in the target directory.
+/// Builds `egide` (the CLI) once and returns the cached binary path.
 #[cfg(test)]
-fn find_cli_binary() -> Result<std::path::PathBuf> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-
-    // Try debug build first, then release
-    let candidates = [
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide"),
-        std::path::Path::new(&manifest_dir).join("../../target/debug/egide.exe"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide"),
-        std::path::Path::new(&manifest_dir).join("../../target/release/egide.exe"),
-    ];
-
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.canonicalize()?);
-        }
-    }
-
-    bail!(
-        "Could not find egide binary. Run 'cargo build -p egide-cli' first. Searched in: {candidates:?}"
-    )
+fn cli_binary() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        escargot::CargoBuild::new()
+            .package("egide-cli")
+            .bin("egide")
+            .run()
+            .expect("failed to build egide")
+            .path()
+            .to_path_buf()
+    })
 }
 
 // ============================================================================
@@ -438,6 +434,12 @@ mod tests {
         PORT_COUNTER.fetch_add(1, Ordering::SeqCst)
     }
 
+    #[test]
+    fn server_binary_is_built_and_exists() {
+        let path = server_binary();
+        assert!(path.exists(), "server binary should exist at {path:?}");
+    }
+
     #[tokio::test]
     async fn test_server_health_in_dev_mode() {
         let server = TestServer::start(next_port()).await.unwrap();
@@ -475,9 +477,9 @@ mod tests {
         let port = next_port();
         let data_dir = TempDir::new().unwrap();
 
-        let server_binary = find_server_binary().unwrap();
+        let server_binary = server_binary();
 
-        let mut process = Command::new(&server_binary)
+        let mut process = Command::new(server_binary)
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
@@ -609,9 +611,9 @@ mod tests {
     async fn test_seal_requires_token_missing_returns_401() {
         let port = next_port();
         let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
+        let server_binary = server_binary();
 
-        let mut process = std::process::Command::new(&server_binary)
+        let mut process = std::process::Command::new(server_binary)
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
@@ -653,9 +655,9 @@ mod tests {
     async fn test_seal_requires_token_invalid_returns_401() {
         let port = next_port();
         let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
+        let server_binary = server_binary();
 
-        let mut process = std::process::Command::new(&server_binary)
+        let mut process = std::process::Command::new(server_binary)
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
@@ -698,9 +700,9 @@ mod tests {
     async fn test_seal_with_root_token_returns_200() {
         let port = next_port();
         let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
+        let server_binary = server_binary();
 
-        let mut process = std::process::Command::new(&server_binary)
+        let mut process = std::process::Command::new(server_binary)
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
@@ -758,10 +760,10 @@ mod tests {
     async fn cli_secrets_roundtrip_authenticates_with_bearer() {
         let port = next_port();
         let data_dir = TempDir::new().unwrap();
-        let server_binary = find_server_binary().unwrap();
-        let cli_binary = find_cli_binary().unwrap();
+        let server_binary = server_binary();
+        let cli_binary = cli_binary();
 
-        let mut process = Command::new(&server_binary)
+        let mut process = Command::new(server_binary)
             .arg("--data-dir")
             .arg(data_dir.path())
             .arg("--bind")
@@ -795,7 +797,7 @@ mod tests {
 
         // `egide secrets put <path> <key>=<value>` should succeed and
         // authenticate with the root token via EGIDE_TOKEN.
-        let put_output = Command::new(&cli_binary)
+        let put_output = Command::new(cli_binary)
             .arg("secrets")
             .arg("put")
             .arg("cli-roundtrip/config")
@@ -814,7 +816,7 @@ mod tests {
         );
 
         // `egide secrets get <path>` should succeed and return the stored value.
-        let get_output = Command::new(&cli_binary)
+        let get_output = Command::new(cli_binary)
             .arg("secrets")
             .arg("get")
             .arg("cli-roundtrip/config")

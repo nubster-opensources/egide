@@ -14,3 +14,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tempfile = "3.10"
+
+[dev-dependencies]
+escargot = "0.5"
