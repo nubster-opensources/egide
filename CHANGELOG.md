@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the clause is mandatory rather than decorative.
 
 ### Changed
+- Prefer dependency versions compatible with the declared Rust 1.94 MSRV during Cargo updates.
 - Transit: `create_key` refuses `chacha20-poly1305` at creation time. That
   type was accepted since 0.1.0 but never actually implemented: keys created
   with it were always encrypted under AES-256-GCM regardless. Accepting it
