@@ -27,7 +27,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@35d8a35b823d6c20db516f5c35eb0a9640942c17 # 1.94.0
 
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: bump
 
