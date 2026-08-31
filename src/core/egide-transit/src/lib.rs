@@ -272,7 +272,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, TransitError> {
         return Err(TransitError::Storage("invalid hex length".into()));
     }
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let text = std::str::from_utf8(pair)
                 .map_err(|_| TransitError::Storage("invalid hex".into()))?;
