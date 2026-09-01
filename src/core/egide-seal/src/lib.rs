@@ -312,7 +312,7 @@ impl SealManager {
     /// Submits a share for unsealing.
     // Kept async to match the public API signature expected by callers; storage calls may be
     // added in a future version without a breaking change.
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn unseal(&mut self, share: &Share) -> Result<UnsealProgress, SealError> {
         match self.status {
             SealStatus::Uninitialized => return Err(SealError::NotInitialized),

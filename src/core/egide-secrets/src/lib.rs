@@ -950,7 +950,9 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
         return Err("odd length hex string".into());
     }
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let s = std::str::from_utf8(pair).map_err(|_| "invalid hex".to_string())?;
             u8::from_str_radix(s, 16).map_err(|e| e.to_string())
