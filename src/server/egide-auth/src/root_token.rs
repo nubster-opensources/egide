@@ -162,6 +162,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_wrong_password_against_stored_hash() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, COMPAT_HASH.as_bytes().to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let result = backend.validate("correct horse battery stapl").await;
+
+        assert!(matches!(result, Err(AuthError::InvalidCredentials)));
+    }
+
+    #[test]
+    fn new_hash_uses_argon2id_default_parameters() {
+        let hash = hash_token(COMPAT_PASSWORD);
+        assert!(hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let first = hash_token(COMPAT_PASSWORD);
+        let second = hash_token(COMPAT_PASSWORD);
+        assert_ne!(first, second, "salt must be drawn fresh for every hash");
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_hash_without_panicking() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, b"not-a-phc-string".to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let result = backend.validate(COMPAT_PASSWORD).await;
+
+        assert!(matches!(result, Err(AuthError::Storage(_))));
+    }
+
+    #[tokio::test]
     async fn test_valid_root_token() {
         let token = "my-secret-root-token";
         let hash = hash_token(token);
