@@ -1024,6 +1024,29 @@ mod tests {
         assert!(verify_token(COMPAT_PASSWORD, COMPAT_HASH));
     }
 
+    #[test]
+    fn rejects_wrong_password_against_stored_hash() {
+        assert!(!verify_token("correct horse battery stapl", COMPAT_HASH));
+    }
+
+    #[test]
+    fn new_hash_uses_argon2id_default_parameters() {
+        let hash = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        assert!(hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let first = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        let second = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        assert_ne!(first, second, "salt must be drawn fresh for every hash");
+    }
+
+    #[test]
+    fn rejects_malformed_hash() {
+        assert!(!verify_token(COMPAT_PASSWORD, "not-a-phc-string"));
+    }
+
     #[tokio::test]
     async fn test_unseal_missing_hmac_fails() {
         let (tmp, mut manager) = setup().await;
