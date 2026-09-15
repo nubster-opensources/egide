@@ -1009,6 +1009,21 @@ mod tests {
         assert_eq!(manager_a.status(), SealStatus::Sealed);
     }
 
+    /// Password and PHC hash fixed by the argon2-0-6 migration compatibility
+    /// vector. Produced by argon2 0.5.3 (`Argon2::default().hash_password`)
+    /// and independently recomputed by argon2-cffi 25.1.0 (reference C
+    /// implementation). Never recompute this literal from code under test:
+    /// it exists to detect a migration that silently stops accepting hashes
+    /// written by the version currently in production.
+    const COMPAT_PASSWORD: &str = "correct horse battery staple";
+    const COMPAT_HASH: &str =
+        "$argon2id$v=19$m=19456,t=2,p=1$ZW5jZWxhZGUtY29tcGF0IQ$PvqN4pZjkPyMJhq1JTRQTKBOhG987wgCXlUwiujDZQ0";
+
+    #[test]
+    fn verifies_hash_stored_by_previous_argon2_release() {
+        assert!(verify_token(COMPAT_PASSWORD, COMPAT_HASH));
+    }
+
     #[tokio::test]
     async fn test_unseal_missing_hmac_fails() {
         let (tmp, mut manager) = setup().await;
