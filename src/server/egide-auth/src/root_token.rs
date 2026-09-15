@@ -2,7 +2,7 @@
 //!
 //! Validates root tokens for dev mode and legacy compatibility.
 
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use argon2::{password_hash::phc::PasswordHash, Argon2, PasswordVerifier};
 use async_trait::async_trait;
 use egide_storage::StorageBackend;
 use std::sync::Arc;
@@ -70,19 +70,14 @@ impl<S: StorageBackend + 'static> AuthBackend for RootTokenBackend<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::{
-        password_hash::{rand_core::OsRng, SaltString},
-        Argon2, PasswordHasher,
-    };
+    use argon2::{Argon2, PasswordHasher};
     use egide_storage::StorageError;
     use std::collections::HashMap;
     use tokio::sync::RwLock;
 
     fn hash_token(token: &str) -> String {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        argon2
-            .hash_password(token.as_bytes(), &salt)
+        Argon2::default()
+            .hash_password(token.as_bytes())
             .expect("failed to hash password")
             .to_string()
     }
@@ -133,6 +128,71 @@ mod tests {
                 .cloned()
                 .collect())
         }
+    }
+
+    /// Password and PHC hash fixed by the argon2-0-6 migration compatibility
+    /// vector. Produced by argon2 0.5.3 (`Argon2::default().hash_password`)
+    /// and independently recomputed by argon2-cffi 25.1.0 (reference C
+    /// implementation). Never recompute this literal from code under test:
+    /// it exists to detect a migration that silently stops accepting hashes
+    /// written by the version currently in production.
+    const COMPAT_PASSWORD: &str = "correct horse battery staple";
+    const COMPAT_HASH: &str =
+        "$argon2id$v=19$m=19456,t=2,p=1$ZW5jZWxhZGUtY29tcGF0IQ$PvqN4pZjkPyMJhq1JTRQTKBOhG987wgCXlUwiujDZQ0";
+
+    #[tokio::test]
+    async fn verifies_hash_stored_by_previous_argon2_release() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, COMPAT_HASH.as_bytes().to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let ctx = backend
+            .validate(COMPAT_PASSWORD)
+            .await
+            .expect("validation must succeed against a hash from the previous argon2 release");
+
+        assert!(ctx.is_root());
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_password_against_stored_hash() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, COMPAT_HASH.as_bytes().to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let result = backend.validate("correct horse battery stapl").await;
+
+        assert!(matches!(result, Err(AuthError::InvalidCredentials)));
+    }
+
+    #[test]
+    fn new_hash_uses_argon2id_default_parameters() {
+        let hash = hash_token(COMPAT_PASSWORD);
+        assert!(hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let first = hash_token(COMPAT_PASSWORD);
+        let second = hash_token(COMPAT_PASSWORD);
+        assert_ne!(first, second, "salt must be drawn fresh for every hash");
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_hash_without_panicking() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, b"not-a-phc-string".to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let result = backend.validate(COMPAT_PASSWORD).await;
+
+        assert!(matches!(result, Err(AuthError::Storage(_))));
     }
 
     #[tokio::test]

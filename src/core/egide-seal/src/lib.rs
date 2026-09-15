@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier},
     Argon2,
 };
 use blahaj::{Share as SharkShare, Sharks};
@@ -539,11 +539,12 @@ fn hmac_tags_match(computed: &[u8], expected: &[u8]) -> bool {
 }
 
 /// Hashes a token with Argon2id.
+///
+/// The salt is drawn internally by [`Argon2::hash_password`] (16 bytes via
+/// `getrandom`); this function never handles salt material directly.
 fn hash_token(token: &str) -> Result<String, SealError> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(token.as_bytes(), &salt)
+    let hash = Argon2::default()
+        .hash_password(token.as_bytes())
         .map_err(|e| SealError::Crypto(e.to_string()))?;
     Ok(hash.to_string())
 }
@@ -1007,6 +1008,44 @@ mod tests {
 
         assert!(matches!(result, Err(SealError::ReconstructionFailed)));
         assert_eq!(manager_a.status(), SealStatus::Sealed);
+    }
+
+    /// Password and PHC hash fixed by the argon2-0-6 migration compatibility
+    /// vector. Produced by argon2 0.5.3 (`Argon2::default().hash_password`)
+    /// and independently recomputed by argon2-cffi 25.1.0 (reference C
+    /// implementation). Never recompute this literal from code under test:
+    /// it exists to detect a migration that silently stops accepting hashes
+    /// written by the version currently in production.
+    const COMPAT_PASSWORD: &str = "correct horse battery staple";
+    const COMPAT_HASH: &str =
+        "$argon2id$v=19$m=19456,t=2,p=1$ZW5jZWxhZGUtY29tcGF0IQ$PvqN4pZjkPyMJhq1JTRQTKBOhG987wgCXlUwiujDZQ0";
+
+    #[test]
+    fn verifies_hash_stored_by_previous_argon2_release() {
+        assert!(verify_token(COMPAT_PASSWORD, COMPAT_HASH));
+    }
+
+    #[test]
+    fn rejects_wrong_password_against_stored_hash() {
+        assert!(!verify_token("correct horse battery stapl", COMPAT_HASH));
+    }
+
+    #[test]
+    fn new_hash_uses_argon2id_default_parameters() {
+        let hash = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        assert!(hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let first = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        let second = hash_token(COMPAT_PASSWORD).expect("hashing must succeed");
+        assert_ne!(first, second, "salt must be drawn fresh for every hash");
+    }
+
+    #[test]
+    fn rejects_malformed_hash() {
+        assert!(!verify_token(COMPAT_PASSWORD, "not-a-phc-string"));
     }
 
     #[tokio::test]
