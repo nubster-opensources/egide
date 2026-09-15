@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier},
     Argon2,
 };
 use blahaj::{Share as SharkShare, Sharks};
@@ -539,11 +539,12 @@ fn hmac_tags_match(computed: &[u8], expected: &[u8]) -> bool {
 }
 
 /// Hashes a token with Argon2id.
+///
+/// The salt is drawn internally by [`Argon2::hash_password`] (16 bytes via
+/// `getrandom`); this function never handles salt material directly.
 fn hash_token(token: &str) -> Result<String, SealError> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(token.as_bytes(), &salt)
+    let hash = Argon2::default()
+        .hash_password(token.as_bytes())
         .map_err(|e| SealError::Crypto(e.to_string()))?;
     Ok(hash.to_string())
 }

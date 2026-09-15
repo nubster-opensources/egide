@@ -2,7 +2,7 @@
 //!
 //! Validates root tokens for dev mode and legacy compatibility.
 
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use argon2::{password_hash::phc::PasswordHash, Argon2, PasswordVerifier};
 use async_trait::async_trait;
 use egide_storage::StorageBackend;
 use std::sync::Arc;
@@ -70,19 +70,14 @@ impl<S: StorageBackend + 'static> AuthBackend for RootTokenBackend<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::{
-        password_hash::{rand_core::OsRng, SaltString},
-        Argon2, PasswordHasher,
-    };
+    use argon2::{Argon2, PasswordHasher};
     use egide_storage::StorageError;
     use std::collections::HashMap;
     use tokio::sync::RwLock;
 
     fn hash_token(token: &str) -> String {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        argon2
-            .hash_password(token.as_bytes(), &salt)
+        Argon2::default()
+            .hash_password(token.as_bytes())
             .expect("failed to hash password")
             .to_string()
     }
