@@ -135,6 +135,32 @@ mod tests {
         }
     }
 
+    /// Password and PHC hash fixed by the argon2-0-6 migration compatibility
+    /// vector. Produced by argon2 0.5.3 (`Argon2::default().hash_password`)
+    /// and independently recomputed by argon2-cffi 25.1.0 (reference C
+    /// implementation). Never recompute this literal from code under test:
+    /// it exists to detect a migration that silently stops accepting hashes
+    /// written by the version currently in production.
+    const COMPAT_PASSWORD: &str = "correct horse battery staple";
+    const COMPAT_HASH: &str =
+        "$argon2id$v=19$m=19456,t=2,p=1$ZW5jZWxhZGUtY29tcGF0IQ$PvqN4pZjkPyMJhq1JTRQTKBOhG987wgCXlUwiujDZQ0";
+
+    #[tokio::test]
+    async fn verifies_hash_stored_by_previous_argon2_release() {
+        let storage = Arc::new(MemoryStorage::new());
+        storage
+            .set(ROOT_TOKEN_HASH_KEY, COMPAT_HASH.as_bytes().to_vec())
+            .await;
+
+        let backend = RootTokenBackend::new(storage);
+        let ctx = backend
+            .validate(COMPAT_PASSWORD)
+            .await
+            .expect("validation must succeed against a hash from the previous argon2 release");
+
+        assert!(ctx.is_root());
+    }
+
     #[tokio::test]
     async fn test_valid_root_token() {
         let token = "my-secret-root-token";
