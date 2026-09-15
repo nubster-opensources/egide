@@ -31,7 +31,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 # Crypto (for root token validation with Argon2)
-argon2 = "0.5"
+argon2 = "0.6"
 sha2 = { workspace = true }
 hex = "0.4"
 subtle = "2.6"
