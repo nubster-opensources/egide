@@ -145,7 +145,7 @@ const ENGINE_ALGORITHM: KeyType = KeyType::Aes256Gcm;
 // Each bool maps to a distinct, independently togglable capability flag; a state machine would
 // add indirection without clarifying intent here.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct KeyConfig {
     /// Key type (default: AES-256-GCM).
     pub key_type: KeyType,
@@ -173,6 +173,12 @@ impl KeyConfig {
             exportable: false,
             deletion_allowed: false,
         }
+    }
+}
+
+impl Default for KeyConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1153,6 +1159,18 @@ mod tests {
 
         let retrieved = engine.get_key("my-key").await.unwrap();
         assert_eq!(retrieved.name, "my-key");
+    }
+
+    #[test]
+    fn test_key_config_default_matches_new() {
+        let config = KeyConfig::default();
+
+        assert_eq!(config.key_type, KeyType::Aes256Gcm);
+        assert!(config.supports_encryption);
+        assert!(config.supports_decryption);
+        assert!(!config.supports_derivation);
+        assert!(!config.exportable);
+        assert!(!config.deletion_allowed);
     }
 
     #[tokio::test]
