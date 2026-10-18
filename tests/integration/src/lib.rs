@@ -496,7 +496,7 @@ mod tests {
 
         // 2. Initialize with 3 shares, threshold 2
         let init_result = client.init(3, 2).await.unwrap();
-        assert!(!init_result.root_token.is_empty());
+        assert_ne!(init_result.root_token, "");
         assert_eq!(init_result.keys.len(), 3);
 
         // 3. Verify still sealed after init

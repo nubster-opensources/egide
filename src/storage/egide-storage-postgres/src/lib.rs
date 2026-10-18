@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(keys, vec!["prod/app/api", "prod/app/db"]);
 
         let keys = backend.list("staging/").await.unwrap();
-        assert!(keys.is_empty());
+        assert_eq!(keys, Vec::<String>::new());
     }
 
     #[tokio::test]

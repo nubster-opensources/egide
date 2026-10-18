@@ -137,7 +137,7 @@ mod tests {
             .await
             .unwrap();
         let body = res.into_inner();
-        assert!(!body.root_token.is_empty());
+        assert_ne!(body.root_token, "");
         assert_eq!(body.shares_hex.len(), 5);
     }
 

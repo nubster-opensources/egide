@@ -1447,7 +1447,7 @@ mod tests {
 
         // The plaintext key is wiped, while the non-sensitive ciphertext is
         // skipped and left intact, confirming the field-level zeroize wiring.
-        assert!(datakey.plaintext.is_empty());
+        assert_eq!(datakey.plaintext.len(), 0);
         assert_eq!(datakey.ciphertext, "egide:v1:dummy-ciphertext");
     }
 

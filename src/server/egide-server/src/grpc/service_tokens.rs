@@ -178,8 +178,8 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
-        assert!(!create_res.token_id.is_empty());
-        assert!(!create_res.raw_token.is_empty());
+        assert_ne!(create_res.token_id, "");
+        assert_ne!(create_res.raw_token, "");
         let token_id = create_res.token_id;
 
         // List.
