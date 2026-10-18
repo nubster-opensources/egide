@@ -678,7 +678,7 @@ mod tests {
         let result = manager.initialize(config).await.unwrap();
 
         assert_eq!(result.shares.len(), 5);
-        assert!(!result.root_token.is_empty());
+        assert_ne!(result.root_token, "");
         assert_eq!(manager.status(), SealStatus::Sealed);
     }
 
