@@ -43,8 +43,10 @@ exceptions = []
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-    # Add advisory IDs to ignore here if needed
-    # "RUSTSEC-0000-0000",
+    # RUSTSEC-2026-0440 (`astral-tokio-tar` unmaintained): pulled by `testcontainers`
+    # through dev-dependencies only, with no known vulnerability and no release free
+    # of it yet. Remove once issue #201 is resolved.
+    "RUSTSEC-2026-0440",
 ]
 
 # =============================================================================
