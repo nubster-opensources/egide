@@ -16,4 +16,4 @@ anyhow = { workspace = true }
 tempfile = "3.10"
 
 [dev-dependencies]
-escargot = "0.5"
+escargot = "1.0"
